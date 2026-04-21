@@ -1,18 +1,48 @@
-node_modules
-dist
+# Dependencies
+node_modules/
+
+# Build files
+dist/
+
+# System files
 .DS_Store
-server/public
-vite.config.ts.*
-*.tar.gz
+
+# Env & secrets
 .env
-.fingerprint
-SKILL.md 
-package-lock.json
-package.json
-.config
-.claude/
-DASHBOARD_DATA_GUIDE.md
-attached_assets/
-.local/
-__pycache__/
+.env.*
+
+# Logs
 *.log
+
+# Local configs
+.config/
+.local/
+.claude/
+
+# Temporary / scratch
+scratch.txt
+
+# Assets / sensitive data
+attached_assets/
+generated-reports/
+
+# Server public (if generated)
+server/public/
+
+# Vite temp configs
+vite.config.ts.*
+
+# Archives
+*.tar.gz
+
+# Project-specific docs (optional ignore)
+SKILL.md
+DASHBOARD_DATA_GUIDE.md
+
+# Cache / fingerprint
+.fingerprint
+
+# Optional (careful)
+# Uncomment only if you don't want to track these:
+# package-lock.json
+# package.json
