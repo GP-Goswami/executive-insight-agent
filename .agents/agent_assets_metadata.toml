@@ -1,0 +1,14 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "D82zJnFf4HJVPORZriBEw"
+uri = "file://PROJECT_DOCUMENTATION.md"
+type = "text"
+title = "Project Documentation"
+
+[[outputs]]
+id = "ijVj1WFuzz8YvknuTBxuI"
+uri = "file://PROJECT_WORKFLOW.md"
+type = "text"
+title = "Project Workflow Documentation"
