@@ -1404,11 +1404,16 @@ export async function registerRoutes(
     res.set('Cache-Control', 'no-store');
     try {
       const siteUrl = req.query.siteUrl as string;
+      const parseYmdLocal = (s: string): string => {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+        if (m) return s; // already a valid YYYY-MM-DD, pass through as-is
+        return format(new Date(s), "yyyy-MM-dd");
+      };
       const startDate = req.query.start
-        ? format(new Date(req.query.start as string), "yyyy-MM-dd")
+        ? parseYmdLocal(req.query.start as string)
         : format(subDays(new Date(), 30), "yyyy-MM-dd");
       const endDate = req.query.end
-        ? format(new Date(req.query.end as string), "yyyy-MM-dd")
+        ? parseYmdLocal(req.query.end as string)
         : format(new Date(), "yyyy-MM-dd");
       const rowLimit = parseInt(req.query.rowLimit as string) || 100;
 
@@ -2597,223 +2602,35 @@ export async function registerRoutes(
     }
   });
 
+  // generate-pdf: accepts a `snapshot` object (pre-fetched on the frontend)
+  // so the PDF contains exactly the data the user sees — no re-fetching.
   app.post("/api/generate-pdf", isAuthenticated, async (req, res) => {
     try {
-      const { propertyId, domain, days, start, end, gscSiteUrl: bodyGscSiteUrl } = req.body;
-      if (!propertyId) {
-        return res.status(400).json({ error: "propertyId is required" });
+      const { domain, start, end, snapshot } = req.body;
+
+      if (!snapshot || !snapshot.metrics) {
+        return res.status(400).json({ error: "snapshot with metrics is required" });
       }
 
-      const internalPropertyId = await storage.getPropertyIdByGa4Id(propertyId, domain);
-      if (!internalPropertyId) {
-        return res.status(404).json({ error: "No property found for the given GA4 Property ID. Please ensure data has been synced first." });
-      }
-
-      let endDate: Date;
-      let startDate: Date;
-      if (start && end) {
-        startDate = startOfDay(new Date(start));
-        endDate = startOfDay(new Date(end));
-      } else {
-        const dayCount = parseInt(days) || 30;
-        endDate = startOfDay(new Date());
-        startDate = subDays(endDate, dayCount - 1);
-      }
-      const diffDays = Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1);
-      const previousEndDate = subDays(startDate, 1);
-      const previousStartDate = subDays(previousEndDate, diffDays - 1);
-
-      const pdfGscDelay = 2;
-      const pdfGscAdjEnd = subDays(endDate, pdfGscDelay);
-      const pdfGscAdjStart = startDate > pdfGscAdjEnd ? pdfGscAdjEnd : startDate;
-
-      const { normalizeData } = await import("./lib/normalization-engine");
-      const { computeSeoMetrics } = await import("./lib/seo-metrics");
-      const { generateInsights } = await import("./lib/insight-engine");
-      const { generateNarrative } = await import("./lib/ai-narrative");
       const { generatePdfReport, buildPdfFilename } = await import("./lib/pdf-generator");
-
-      const aggregatedData = await storage.getAggregatedSeoData(
-        internalPropertyId,
-        startDate,
-        endDate,
-        previousStartDate,
-        previousEndDate
-      );
-
-      const pdfProperty = await storage.getProperty(internalPropertyId);
-      const pdfGscSiteUrl = pdfProperty?.gscSiteUrl
-        || bodyGscSiteUrl
-        || (domain ? `https://${(domain as string).replace(/^https?:\/\//, "")}/` : "");
-      if (pdfGscSiteUrl && hasGoogleCredentials()) {
-        try {
-          const gscStartDate = format(pdfGscAdjStart, "yyyy-MM-dd");
-          const gscEndDate = format(pdfGscAdjEnd, "yyyy-MM-dd");
-          const liveGscData = await getGSCTable(pdfGscSiteUrl, gscStartDate, gscEndDate, "query", 1000);
-          if (liveGscData && liveGscData.length > 0) {
-            let totalClicks = 0, totalImpressions = 0;
-            for (const row of liveGscData as any[]) {
-              totalClicks += row.clicks || 0;
-              totalImpressions += row.impressions || 0;
-            }
-            const liveCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
-            const liveAvgPos = liveGscData.reduce((sum: number, r: any) => sum + (r.position || 0), 0) / liveGscData.length;
-            aggregatedData.gsc = {
-              clicks: totalClicks,
-              impressions: totalImpressions,
-              ctr: Math.round(liveCtr * 100) / 100,
-              avgPosition: Math.round(liveAvgPos * 100) / 100,
-            };
-          }
-        } catch (e) {
-          console.error("PDF: Failed to fetch live GSC summary:", e);
-        }
-      }
-
-      const normalized = normalizeData(aggregatedData);
-      const metrics = computeSeoMetrics(normalized);
-      const insights = generateInsights(normalized);
-
-      let summary: string;
-      try {
-        summary = await generateNarrative(insights);
-      } catch {
-        summary = "Executive summary generation is unavailable. Please review the insights below for a detailed performance breakdown.";
-      }
-
-      let dailyTrends = { ga4Daily: [] as any[], gscDaily: [] as any[] };
-      let keywordDistribution = { top3: 0, top10: 0, top20: 0, top50: 0, top100: 0, beyond: 0 };
-
-      const pdfLiveStart = format(startDate, "yyyy-MM-dd");
-      const pdfLiveEnd = format(endDate, "yyyy-MM-dd");
-
-      const results = await Promise.allSettled([
-        hasGoogleCredentials() && propertyId
-          ? getGA4DailyTraffic(propertyId, pdfLiveStart, pdfLiveEnd).then(data => ({
-              ga4Daily: data.map(d => ({ date: d.date, users: d.users, sessions: d.sessions })),
-              gscDaily: [] as any[],
-            }))
-          : storage.getDailyTrends(internalPropertyId, startDate, endDate),
-        storage.getKeywordDistribution(internalPropertyId, startDate, endDate),
-      ]);
-      if (results[0].status === "fulfilled") dailyTrends = results[0].value;
-      if (results[1].status === "fulfilled") keywordDistribution = results[1].value;
-
-      if (dailyTrends.ga4Daily.length === 0) {
-        try {
-          const dbTrends = await storage.getDailyTrends(internalPropertyId, startDate, endDate);
-          dailyTrends.ga4Daily = dbTrends.ga4Daily;
-          if (dailyTrends.gscDaily.length === 0) dailyTrends.gscDaily = dbTrends.gscDaily;
-        } catch {}
-      }
-
-      if (dailyTrends.gscDaily.length === 0 && pdfGscSiteUrl && hasGoogleCredentials()) {
-        try {
-          const client = await (await import("./lib/google-apis")).getSearchConsoleClient();
-          if (client) {
-            const response = await client.searchanalytics.query({
-              siteUrl: pdfGscSiteUrl,
-              requestBody: {
-                startDate: format(pdfGscAdjStart, "yyyy-MM-dd"),
-                endDate: format(pdfGscAdjEnd, "yyyy-MM-dd"),
-                dimensions: ["date"],
-                rowLimit: 500,
-                dataState: "final",
-              },
-            });
-            if (response.data.rows && response.data.rows.length > 0) {
-              dailyTrends.gscDaily = response.data.rows.map((row) => ({
-                date: row.keys?.[0] || "",
-                clicks: row.clicks || 0,
-                impressions: row.impressions || 0,
-              }));
-            }
-          }
-        } catch (e) {
-          console.error("PDF: Failed to fetch live GSC daily trends:", e);
-        }
-      }
-
-      let topPages: any[] = [];
-      let topPagesSource: "gsc" | "ga4" = "gsc";
-      if (pdfGscSiteUrl && hasGoogleCredentials()) {
-        try {
-          const gscStartDate = format(pdfGscAdjStart, "yyyy-MM-dd");
-          const gscEndDate = format(pdfGscAdjEnd, "yyyy-MM-dd");
-          const gscPageData = await getGSCTable(pdfGscSiteUrl, gscStartDate, gscEndDate, "page", 10);
-          if (gscPageData && gscPageData.length > 0) {
-            topPages = gscPageData.map((p: any) => ({
-              page: p.page || "",
-              clicks: p.clicks || 0,
-              impressions: p.impressions || 0,
-              ctr: p.ctr ? Math.round(p.ctr * 100) / 100 : 0,
-              position: p.position ? Math.round(p.position * 10) / 10 : 0,
-            }));
-          }
-        } catch (e) {
-          console.error("PDF: Failed to fetch GSC top pages from API:", e);
-        }
-      }
-
-      if (topPages.length === 0) {
-        topPagesSource = "ga4";
-        try {
-          const ga4Metrics = await storage.getGa4Metrics(internalPropertyId, startDate, endDate);
-          const pageMap = new Map<string, { sessions: number; users: number; conversions: number }>();
-          for (const row of ga4Metrics) {
-            if (row.landingPagePath) {
-              const existing = pageMap.get(row.landingPagePath) || { sessions: 0, users: 0, conversions: 0 };
-              existing.sessions += Number(row.sessions || 0);
-              existing.users += Number(row.totalUsers || 0);
-              existing.conversions += Number(row.conversions || 0);
-              pageMap.set(row.landingPagePath, existing);
-            }
-          }
-          topPages = Array.from(pageMap.entries())
-            .map(([page, data]) => ({ page, clicks: 0, impressions: 0, ctr: 0, position: 0, ...data }))
-            .sort((a, b) => (b as any).sessions - (a as any).sessions)
-            .slice(0, 10);
-        } catch {
-          topPages = [];
-        }
-      }
-
-      let pdfAiReferrers: any[] = [];
-      if (hasGoogleCredentials() && propertyId) {
-        try {
-          const aiData = await getGA4AIReferrers(propertyId, format(startDate, "yyyy-MM-dd"), format(endDate, "yyyy-MM-dd"));
-          pdfAiReferrers = (aiData || []).map((item) => ({
-            source: item.source,
-            totalUsers: item.users,
-            sessions: item.sessions,
-          }));
-        } catch (e) {
-          console.error("PDF: Failed to fetch AI referrers:", e);
-        }
-      }
-
-      const pdfTotalUsers = metrics.traffic.users;
-      for (const ref of pdfAiReferrers) {
-        ref.percentOfTotal = pdfTotalUsers > 0 ? Math.round((ref.totalUsers / pdfTotalUsers) * 10000) / 100 : 0;
-      }
 
       const reportDomain = domain || "unknown-domain";
       const filename = buildPdfFilename(reportDomain);
 
       const pdfBuffer = await generatePdfReport({
         domain: reportDomain,
-        dateRange: {
-          start: format(startDate, "yyyy-MM-dd"),
-          end: format(endDate, "yyyy-MM-dd"),
-        },
-        metrics,
-        insights,
-        summary,
-        topPages,
-        topPagesSource,
-        dailyTrends,
-        keywordDistribution,
-        aiReferrers: pdfAiReferrers,
+        dateRange: { start: start || "", end: end || "" },
+        metrics: snapshot.metrics,
+        insights: snapshot.insights || [],
+        summary: snapshot.summary || "",
+        topPages: snapshot.topPages || [],
+        topPagesSource: snapshot.topPagesSource || "gsc",
+        dailyTrends: snapshot.dailyTrends || { ga4Daily: [], gscDaily: [] },
+        keywordDistribution: snapshot.keywordDistribution || { top3: 0, top10: 0, top20: 0, top50: 0, top100: 0, beyond: 0 },
+        aiReferrers: snapshot.aiReferrers || [],
+        keywords: snapshot.keywords || [],
+        trafficSummary: snapshot.trafficSummary || null,
+        ga4TopPages: snapshot.ga4TopPages || [],
       });
 
       res.setHeader("Content-Type", "application/pdf");
@@ -3000,8 +2817,8 @@ export async function registerRoutes(
 
       if (gscSiteUrl && hasGoogleCredentials()) {
         try {
-          const gscStartDate = format(gscAdjustedStart, "yyyy-MM-dd");
-          const gscEndDate = format(gscAdjustedEnd, "yyyy-MM-dd");
+          const gscStartDate = format(startDate, "yyyy-MM-dd");
+          const gscEndDate = format(endDate, "yyyy-MM-dd");
           const gscPageData = await getGSCTable(gscSiteUrl, gscStartDate, gscEndDate, "page", 10);
           if (gscPageData && gscPageData.length > 0) {
             topPages = gscPageData.map((p: any) => ({

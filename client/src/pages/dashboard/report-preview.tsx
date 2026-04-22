@@ -240,19 +240,36 @@ export default function ReportPreviewPage() {
   const ga4TopPages = ga4TopPagesResponse?.data || [];
 
   const handleDownloadPdf = async () => {
-    if (!ga4PropertyId) return;
+    if (!report) return;
     setIsDownloading(true);
     try {
-      const body: any = { propertyId: ga4PropertyId, domain, gscSiteUrl };
-      if (startStr) body.start = startStr;
-      if (endStr) body.end = endStr;
+      // Build a snapshot of everything already rendered on screen so the PDF
+      // shows identical data without any re-fetching on the backend.
+      const snapshot = {
+        metrics: report.metrics,
+        insights: report.insights,
+        summary: report.summary,
+        topPages: report.topPages,
+        topPagesSource: report.topPagesSource,
+        dailyTrends: report.dailyTrends,
+        keywordDistribution: report.keywordDistribution,
+        aiReferrers: report.aiReferrers || [],
+        keywords: topKeywords,
+        trafficSummary: trafficSummary || null,
+        ga4TopPages: ga4TopPages,
+      };
+
+      const body = { domain, start: startStr, end: endStr, snapshot };
       const res = await fetch("/api/generate-pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error("PDF generation failed");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "PDF generation failed");
+      }
       const blob = await res.blob();
       const disposition = res.headers.get("Content-Disposition");
       const filenameMatch = disposition?.match(/filename="(.+)"/);

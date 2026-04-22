@@ -266,7 +266,7 @@ export async function getGSCTopKeywords(
       endDate,
       dimensions: ["query"],
       rowLimit,
-      dataState: "final",
+      dataState: "all",
     };
 
     debugLog("gsc-top-keywords", `Request: siteUrl=${siteUrl}, ${startDate} → ${endDate}, rowLimit=${rowLimit}`);
@@ -339,10 +339,12 @@ export async function getGSCSummary(
     // ─── STRICT RULE: NO dimensions — this returns true aggregate totals ───
     // Using dimensions would give per-row data that sums incorrectly when
     // rowLimit is hit. aggregationType: "auto" is the correct GSC summary call.
+    // dataState: "all" includes the most recent 2-3 days that are still being
+    // processed by Google, matching what the GSC dashboard shows by default.
     const requestBody: any = {
       startDate,
       endDate,
-      dataState: "final",
+      dataState: "all",
       aggregationType: "auto",
     };
 
@@ -393,14 +395,13 @@ export async function getGSCTable(
     const client = await getSearchConsoleClient();
     if (!client) throw new Error("GSC client not configured");
 
-    // ─── STRICT RULE: dimensions REQUIRED here — this is for the table only ───
     // NEVER use this data to calculate summary totals. rowLimit caps results.
     const requestBody: any = {
       startDate,
       endDate,
       dimensions: [dimension],
       rowLimit,
-      dataState: "final",
+      dataState: "all",
     };
 
     if (country || device) {

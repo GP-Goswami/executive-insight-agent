@@ -31,6 +31,31 @@ interface AiReferrer {
   percentOfTotal?: number;
 }
 
+interface GscKeyword {
+  query: string;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+}
+
+interface TrafficSummary {
+  users: number;
+  sessions: number;
+  engagedSessions: number;
+  engagementRate: number;
+  avgEngagementTimeFormatted: string;
+}
+
+interface Ga4ExtendedPage {
+  page: string;
+  screenPageViews: number;
+  totalUsers: number;
+  sessions: number;
+  engagementRate: number;
+  avgEngagementTimeFormatted: string;
+}
+
 export interface PdfReportData {
   domain: string;
   dateRange: { start: string; end: string };
@@ -42,6 +67,9 @@ export interface PdfReportData {
   dailyTrends: DailyTrends;
   keywordDistribution: KeywordDistribution;
   aiReferrers?: AiReferrer[];
+  keywords?: GscKeyword[];
+  trafficSummary?: TrafficSummary;
+  ga4TopPages?: Ga4ExtendedPage[];
 }
 
 const C = {
@@ -217,6 +245,8 @@ export function generatePdfReport(data: PdfReportData): Promise<Buffer> {
     doc.on("error", reject);
 
     const searchValid = data.metrics.search.impressions > 0;
+    const bl = data.metrics.backlinks;
+    const convMetrics = data.metrics.conversions;
 
     // ===== TITLE BLOCK =====
     doc.font("Helvetica-Bold").fontSize(18).fillColor(C.primary)
@@ -227,153 +257,179 @@ export function generatePdfReport(data: PdfReportData): Promise<Buffer> {
       .text(`${sanitize(data.dateRange.start)} -- ${sanitize(data.dateRange.end)}  |  Generated ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`, M, M + 42, { width: CW });
     doc.y = M + 60;
 
-    // ===== 1. KPI SECTION =====
-    sectionTitle(doc, "Key Performance Indicators");
+    // ===== 1. KPI SNAPSHOT =====
+    // 2-row grid: Row 1 — Users (GA4), Sessions (GA4), Clicks (GSC)
+    //             Row 2 — Impressions (GSC), CTR (GSC), Avg Position (GSC)
+    sectionTitle(doc, "1. KPI Snapshot");
 
     const c3w = (CW - 20) / 3;
     const kpiY1 = doc.y;
-    const trafficDelta = data.metrics.traffic.growthRate;
-    drawKpiCard(doc, M, kpiY1, c3w, "Users", data.metrics.traffic.users.toLocaleString(), C.accent, {
-      delta: trafficDelta !== 0 ? trafficDelta : undefined,
-      deltaSuffix: "%",
-    });
-    drawKpiCard(doc, M + c3w + 10, kpiY1, c3w, "Sessions", data.metrics.traffic.sessions.toLocaleString(), C.primary);
-    drawKpiCard(doc, M + (c3w + 10) * 2, kpiY1, c3w, "Clicks", data.metrics.search.clicks.toLocaleString(), C.positive);
+    drawKpiCard(doc, M,                  kpiY1, c3w, "Users",       data.metrics.traffic.users.toLocaleString(),    C.accent,   { subtitle: "GA4" });
+    drawKpiCard(doc, M + c3w + 10,       kpiY1, c3w, "Sessions",    data.metrics.traffic.sessions.toLocaleString(), C.primary,  { subtitle: "GA4" });
+    drawKpiCard(doc, M + (c3w + 10) * 2, kpiY1, c3w, "Clicks",      data.metrics.search.clicks.toLocaleString(),   C.positive, { subtitle: "GSC" });
     doc.y = kpiY1 + 76;
 
     const kpiY2 = doc.y;
-    drawKpiCard(doc, M, kpiY2, c3w, "Impressions", data.metrics.search.impressions.toLocaleString(), C.warning);
-    drawKpiCard(doc, M + c3w + 10, kpiY2, c3w, "CTR", searchValid ? `${data.metrics.search.ctr}%` : "N/A", C.accent, {
-      subtitle: !searchValid ? "Insufficient data" : undefined,
+    drawKpiCard(doc, M,                  kpiY2, c3w, "Impressions", data.metrics.search.impressions.toLocaleString(), C.warning, { subtitle: "GSC" });
+    drawKpiCard(doc, M + c3w + 10,       kpiY2, c3w, "CTR",         searchValid ? `${data.metrics.search.ctr}%` : "N/A", C.accent, {
+      subtitle: "GSC",
       benchmarkPass: searchValid ? data.metrics.search.ctr >= 5 : undefined,
     });
     drawKpiCard(doc, M + (c3w + 10) * 2, kpiY2, c3w, "Avg Position", searchValid ? data.metrics.search.avgPosition.toFixed(1) : "N/A", C.primary, {
-      subtitle: !searchValid ? "Insufficient data" : undefined,
+      subtitle: "GSC",
       lowVisibility: searchValid && data.metrics.search.avgPosition > 20,
     });
     doc.y = kpiY2 + 76;
 
-    const convMetrics = data.metrics.conversions;
-    if (convMetrics && (convMetrics.current > 0 || convMetrics.previous > 0)) {
-      const kpiY3 = doc.y;
-      drawKpiCard(doc, M, kpiY3, c3w, "Conversions", convMetrics.current.toLocaleString(), C.positive, {
-        delta: convMetrics.growthRate !== 0 ? convMetrics.growthRate : undefined,
-        deltaSuffix: "%",
-        previousValue: convMetrics.previous.toLocaleString(),
-      });
-      doc.y = kpiY3 + 76;
-    }
-
     // ===== 2. EXECUTIVE SUMMARY =====
     ensureSpace(doc, 80);
-    sectionTitle(doc, "Executive Summary");
+    sectionTitle(doc, "2. Executive Summary");
 
-    const safeSummary = sanitize(data.summary);
-    const summaryTextOpts = { width: CW - 24, lineGap: 3.5, align: "left" as const };
-    const summaryHeight = doc.font("Helvetica").fontSize(9).heightOfString(safeSummary, summaryTextOpts);
-    const boxH = summaryHeight + 24;
+    if (data.summary) {
+      const safeSummary = sanitize(data.summary);
+      const summaryTextOpts = { width: CW - 24, lineGap: 3.5, align: "left" as const };
+      const summaryHeight = doc.font("Helvetica").fontSize(9).heightOfString(safeSummary, summaryTextOpts);
+      const boxH = summaryHeight + 24;
+      ensureSpace(doc, boxH + 10);
+      const boxY = doc.y;
+      doc.roundedRect(M, boxY, CW, boxH, 4).fillAndStroke(C.bg, C.border);
+      doc.rect(M, boxY, 3, boxH).fill(C.accent);
+      doc.font("Helvetica").fontSize(9).fillColor(C.text).text(safeSummary, M + 14, boxY + 12, summaryTextOpts);
+      doc.y = boxY + boxH + 12;
+    }
 
-    ensureSpace(doc, boxH + 10);
-    const boxY = doc.y;
-    doc.roundedRect(M, boxY, CW, boxH, 4).fillAndStroke(C.bg, C.border);
-    doc.rect(M, boxY, 3, boxH).fill(C.accent);
-    doc.font("Helvetica").fontSize(9).fillColor(C.text)
-      .text(safeSummary, M + 14, boxY + 12, summaryTextOpts);
-    doc.y = boxY + boxH + 16;
+    // Wins / Risks / Recommendations bullets
+    const risks    = data.insights.filter(i => i.type === "warning");
+    const positives = data.insights.filter(i => i.type === "positive");
+    const neutral   = data.insights.filter(i => i.type === "neutral");
+
+    const drawBulletBlock = (title: string, color: string, items: string[]) => {
+      if (items.length === 0) return;
+      ensureSpace(doc, 30 + items.length * 18);
+      doc.font("Helvetica-Bold").fontSize(8.5).fillColor(color).text(title, M + 4, doc.y);
+      doc.y += 10;
+      for (const msg of items) {
+        const clean = msg.replace(/[^\x20-\x7E\n]/g, "").replace(/\s+/g, " ").trim();
+        const opts = { width: CW - 28, lineGap: 2 };
+        const h = doc.font("Helvetica").fontSize(8).heightOfString(clean, opts);
+        ensureSpace(doc, h + 8);
+        doc.rect(M + 8, doc.y, 2, h + 2).fill(color);
+        doc.font("Helvetica").fontSize(8).fillColor(C.text).text(clean, M + 16, doc.y + 1, opts);
+        doc.y += h + 6;
+      }
+      doc.y += 6;
+    };
+
+    drawBulletBlock("✓ Wins / Positive Signals", C.positive, positives.map(i => i.message));
+    drawBulletBlock("⚠ Risks / Problems",        C.danger,   risks.map(i => i.message));
+
+    const recommendations = risks.map(r => {
+      switch (r.category) {
+        case "ctr":         return "Improve on-page titles and meta descriptions to lift CTR.";
+        case "keywords":    return "Prioritize page-2 keywords for quick ranking gains.";
+        case "traffic":     return "Investigate traffic source decline and diversify acquisition channels.";
+        case "conversions": return "Audit landing pages and conversion funnels for friction points.";
+        case "backlinks":   return "Launch a targeted outreach campaign to rebuild referring domains.";
+        default:            return r.message;
+      }
+    });
+    drawBulletBlock("💡 Recommendations", C.accent, recommendations);
 
     // ===== 3. KEY INSIGHTS =====
     ensureSpace(doc, 60);
-    sectionTitle(doc, "Key Insights");
-
-    const risks = data.insights.filter(i => i.type === "warning");
-    const opportunities = data.insights.filter(i => i.type === "positive");
-    const neutral = data.insights.filter(i => i.type === "neutral");
+    sectionTitle(doc, "3. Key Insights");
 
     const drawInsightGroup = (title: string, items: Insight[], color: string) => {
       ensureSpace(doc, 30);
       doc.font("Helvetica-Bold").fontSize(9).fillColor(color).text(`${title} (${items.length})`, M + 4, doc.y);
       doc.y += 12;
-
       if (items.length === 0) {
         doc.font("Helvetica").fontSize(8).fillColor(C.textMuted).text("None identified for this period.", M + 18, doc.y);
         doc.y += 14;
         return;
       }
-
       for (const ins of items) {
-        const cleanMsg = ins.message
-          .replace(/[^\x20-\x7E\n]/g, "")
-          .replace(/\s+/g, " ")
-          .trim();
-        const textOpts = { width: CW - 30, lineGap: 2 };
-        const textH = doc.font("Helvetica").fontSize(8.5).heightOfString(cleanMsg, textOpts);
-        ensureSpace(doc, textH + 10);
-        doc.rect(M + 10, doc.y, 2, textH + 4).fill(color);
-        doc.font("Helvetica").fontSize(8.5).fillColor(C.text)
-          .text(cleanMsg, M + 18, doc.y + 1, textOpts);
-        doc.y += textH + 8;
+        const clean = ins.message.replace(/[^\x20-\x7E\n]/g, "").replace(/\s+/g, " ").trim();
+        const opts = { width: CW - 30, lineGap: 2 };
+        const h = doc.font("Helvetica").fontSize(8.5).heightOfString(clean, opts);
+        ensureSpace(doc, h + 10);
+        doc.rect(M + 10, doc.y, 2, h + 4).fill(color);
+        doc.font("Helvetica").fontSize(8.5).fillColor(C.text).text(clean, M + 18, doc.y + 1, opts);
+        doc.y += h + 8;
       }
       doc.y += 6;
     };
 
-    drawInsightGroup("Risks", risks, C.danger);
-    drawInsightGroup("Opportunities", opportunities, C.positive);
-    drawInsightGroup("Observations", neutral, C.neutral);
+    drawInsightGroup("Opportunities", positives, C.positive);
+    drawInsightGroup("Observations",  neutral,   C.neutral);
 
     doc.y += 4;
 
-    // ===== 4. WHAT CHANGED =====
-    ensureSpace(doc, 90);
-    sectionTitle(doc, "What Changed");
+    // ===== 4. TRAFFIC TREND =====
+    sectionTitle(doc, "4. Traffic Trend");
 
-    const changes: { label: string; value: number; display: string }[] = [
-      { label: "Traffic Growth", value: data.metrics.traffic.growthRate, display: formatDelta(data.metrics.traffic.growthRate, "%") },
-      { label: "Keyword Net Growth", value: data.metrics.keywords.netGrowth, display: data.metrics.keywords.netGrowth !== 0 ? formatDelta(data.metrics.keywords.netGrowth, " keywords") : "Stable" },
-    ];
+    // ── 4a. Traffic Summary (GA4) ──
+    if (data.trafficSummary) {
+      const ts = data.trafficSummary;
+      ensureSpace(doc, 80);
+      doc.font("Helvetica").fontSize(7).fillColor(C.textMuted).text("TRAFFIC SUMMARY  ·  GA4", M, doc.y, { characterSpacing: 0.5 });
+      doc.y += 10;
 
-    if (searchValid) {
-      const gap = data.metrics.search.ctrGap;
-      changes.push({
-        label: "CTR vs Benchmark",
-        value: gap <= 0 ? 1 : -1,
-        display: gap <= 0 ? `+${Math.abs(gap)}% above target` : `-${gap}% below target`,
-      });
+      const tsColW = (CW - 30) / 5;
+      const tsY = doc.y;
+      const tsItems = [
+        { label: "Users",              value: ts.users.toLocaleString() },
+        { label: "Sessions",           value: ts.sessions.toLocaleString() },
+        { label: "Engaged Sessions",   value: ts.engagedSessions.toLocaleString() },
+        { label: "Engagement Rate",    value: `${ts.engagementRate}%` },
+        { label: "Avg Engagement Time",value: ts.avgEngagementTimeFormatted },
+      ];
+      const tsAccents = [C.accent, C.primary, C.positive, C.warning, C.accent];
+      for (let i = 0; i < tsItems.length; i++) {
+        const tx = M + i * (tsColW + 7.5);
+        doc.roundedRect(tx, tsY, tsColW, 52, 3).fillAndStroke(C.cardBg, C.border);
+        doc.rect(tx, tsY, 3, 52).fill(tsAccents[i]);
+        doc.font("Helvetica").fontSize(6.5).fillColor(C.textLight)
+          .text(tsItems[i].label.toUpperCase(), tx + 8, tsY + 7, { width: tsColW - 16, characterSpacing: 0.3 });
+        doc.font("Helvetica-Bold").fontSize(12).fillColor(C.text)
+          .text(tsItems[i].value, tx + 8, tsY + 20, { width: tsColW - 16 });
+      }
+      doc.y = tsY + 60;
     }
 
-    if (convMetrics && (convMetrics.current > 0 || convMetrics.previous > 0)) {
-      changes.push({
-        label: "Conversion Growth",
-        value: convMetrics.growthRate,
-        display: formatDelta(convMetrics.growthRate, "%"),
-      });
+    // ── 4b. Daily Trend Chart ──
+    const chartH = 120;
+    const hasTrafficChart = data.dailyTrends.ga4Daily.length > 1;
+    const hasSearchChart  = data.dailyTrends.gscDaily.length > 1;
+
+    ensureSpace(doc, chartH + 30);
+    doc.font("Helvetica").fontSize(7).fillColor(C.textMuted).text("DAILY TREND", M, doc.y, { characterSpacing: 0.5 });
+    doc.y += 6;
+    if (hasTrafficChart) {
+      const usersData    = data.dailyTrends.ga4Daily.map(d => ({ label: d.date, value: d.users }));
+      const sessionsData = data.dailyTrends.ga4Daily.map(d => ({ label: d.date, value: d.sessions }));
+      drawLineChart(doc, M, doc.y + 14, CW, chartH, usersData, C.accent, "Traffic Trend (Users / Sessions)", sessionsData, C.primary, ["Users", "Sessions"]);
+      doc.y += chartH + 28;
+    } else if (hasSearchChart) {
+      const clicksData = data.dailyTrends.gscDaily.map(d => ({ label: d.date, value: d.clicks }));
+      const impData    = data.dailyTrends.gscDaily.map(d => ({ label: d.date, value: d.impressions }));
+      drawLineChart(doc, M, doc.y + 14, CW, chartH, clicksData, C.positive, "Search Performance (Clicks / Impressions)", impData, C.warning, ["Clicks", "Impressions"]);
+      doc.y += chartH + 28;
+    } else {
+      doc.roundedRect(M, doc.y, CW, 36, 4).fillAndStroke(C.bg, C.border);
+      doc.font("Helvetica").fontSize(8.5).fillColor(C.textLight)
+        .text("Not enough daily data to display trend.", M, doc.y + 12, { width: CW, align: "center" });
+      doc.y += 44;
     }
 
-    for (const change of changes) {
-      ensureSpace(doc, 28);
-      const rowY = doc.y;
-      const color = change.label === "CTR vs Benchmark"
-        ? (change.value > 0 ? C.positive : C.danger)
-        : (change.value > 0 ? C.positive : change.value < 0 ? C.danger : C.neutral);
-
-      doc.roundedRect(M, rowY, CW, 22, 3).fill(C.bg);
-      doc.font("Helvetica").fontSize(8.5).fillColor(C.text)
-        .text(change.label, M + 12, rowY + 6, { width: 150 });
-      doc.font("Helvetica-Bold").fontSize(8.5).fillColor(color)
-        .text(change.display, M + 170, rowY + 6, { width: CW - 180 });
-      doc.y = rowY + 26;
-    }
-
-    doc.y += 10;
-
-    // ===== 5. TOP PAGES TABLE =====
+    // ── 4c. Top Pages from GSC ──
     if (data.topPages.length > 0) {
-      const rowCount = Math.min(data.topPages.length, 10);
-      ensureSpace(doc, 60 + rowCount * 18);
-      sectionTitle(doc, "Top Pages");
-
+      const rowCount  = Math.min(data.topPages.length, 10);
       const hasGscData = data.topPagesSource === "gsc";
-      const sourceLabel = hasGscData ? "Source: Search Console" : "Source: GA4";
-      doc.font("Helvetica").fontSize(6.5).fillColor(C.textMuted).text(sourceLabel, M, doc.y - 10, { width: CW, align: "right" });
+      ensureSpace(doc, 60 + rowCount * 18);
+      doc.font("Helvetica").fontSize(7).fillColor(C.textMuted)
+        .text(`TOP PAGES  ·  ${hasGscData ? "SEARCH CONSOLE" : "GA4"}`, M, doc.y, { characterSpacing: 0.5 });
+      doc.y += 8;
 
       const colWidths = hasGscData
         ? [CW * 0.36, CW * 0.14, CW * 0.20, CW * 0.14, CW * 0.16]
@@ -393,50 +449,122 @@ export function generatePdfReport(data: PdfReportData): Promise<Buffer> {
 
       for (let i = 0; i < rowCount; i++) {
         ensureSpace(doc, 18);
-        const p = data.topPages[i];
-        const ry = doc.y;
+        const p   = data.topPages[i];
+        const ry  = doc.y;
         doc.rect(M, ry, CW, 16).fill(i % 2 === 0 ? C.bg : C.cardBg);
-
         let cx = M;
-        const rawPage = sanitize(p.page || "");
+        const rawPage  = sanitize(p.page || "");
         const pagePath = rawPage.length > 42 ? rawPage.slice(0, 42) + "..." : rawPage;
-
-        doc.font("Helvetica").fontSize(7).fillColor(C.text)
-          .text(pagePath, cx + 6, ry + 4, { width: colWidths[0] - 12 });
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(pagePath, cx + 6, ry + 4, { width: colWidths[0] - 12 });
         cx += colWidths[0];
-
         if (hasGscData) {
-          doc.font("Helvetica").fontSize(7).fillColor(C.text).text(p.clicks.toLocaleString(), cx + 6, ry + 4, { width: colWidths[1] - 12, align: "right" });
-          cx += colWidths[1];
-          doc.font("Helvetica").fontSize(7).fillColor(C.text).text(p.impressions.toLocaleString(), cx + 6, ry + 4, { width: colWidths[2] - 12, align: "right" });
-          cx += colWidths[2];
-          doc.font("Helvetica").fontSize(7).fillColor(C.text).text(`${p.ctr}%`, cx + 6, ry + 4, { width: colWidths[3] - 12, align: "right" });
-          cx += colWidths[3];
-          doc.font("Helvetica").fontSize(7).fillColor(C.text).text(p.position.toString(), cx + 6, ry + 4, { width: colWidths[4] - 12, align: "right" });
+          doc.font("Helvetica").fontSize(7).fillColor(C.text).text(p.clicks.toLocaleString(),      cx + 6, ry + 4, { width: colWidths[1] - 12, align: "right" }); cx += colWidths[1];
+          doc.font("Helvetica").fontSize(7).fillColor(C.text).text(p.impressions.toLocaleString(), cx + 6, ry + 4, { width: colWidths[2] - 12, align: "right" }); cx += colWidths[2];
+          doc.font("Helvetica").fontSize(7).fillColor(C.text).text(`${p.ctr}%`,                   cx + 6, ry + 4, { width: colWidths[3] - 12, align: "right" }); cx += colWidths[3];
+          doc.font("Helvetica").fontSize(7).fillColor(C.text).text(p.position.toString(),          cx + 6, ry + 4, { width: colWidths[4] - 12, align: "right" });
         } else {
           const ga4p = p as any;
-          doc.font("Helvetica").fontSize(7).fillColor(C.text).text((ga4p.sessions || 0).toLocaleString(), cx + 6, ry + 4, { width: colWidths[1] - 12, align: "right" });
-          cx += colWidths[1];
-          doc.font("Helvetica").fontSize(7).fillColor(C.text).text((ga4p.users || 0).toLocaleString(), cx + 6, ry + 4, { width: colWidths[2] - 12, align: "right" });
-          cx += colWidths[2];
+          doc.font("Helvetica").fontSize(7).fillColor(C.text).text((ga4p.sessions    || 0).toLocaleString(), cx + 6, ry + 4, { width: colWidths[1] - 12, align: "right" }); cx += colWidths[1];
+          doc.font("Helvetica").fontSize(7).fillColor(C.text).text((ga4p.users       || 0).toLocaleString(), cx + 6, ry + 4, { width: colWidths[2] - 12, align: "right" }); cx += colWidths[2];
           doc.font("Helvetica").fontSize(7).fillColor(C.text).text((ga4p.conversions || 0).toLocaleString(), cx + 6, ry + 4, { width: colWidths[3] - 12, align: "right" });
         }
-
         doc.y = ry + 16;
       }
-
-      doc.y += 14;
+      doc.y += 12;
     }
 
-    // ===== 5b. BACKLINKS SECTION =====
-    ensureSpace(doc, 60);
-    sectionTitle(doc, "Backlinks");
+    // ── 4d. Top Pages GA4 (Extended) ──
+    if (data.ga4TopPages && data.ga4TopPages.length > 0) {
+      const g4Pages = data.ga4TopPages.slice(0, 10);
+      ensureSpace(doc, 60 + g4Pages.length * 16);
+      doc.font("Helvetica").fontSize(7).fillColor(C.textMuted).text("TOP PAGES (GA4 — PAGE VIEWS)", M, doc.y, { characterSpacing: 0.5 });
+      doc.y += 8;
 
-    const bl = data.metrics.backlinks;
+      const g4Cols    = [CW * 0.30, CW * 0.13, CW * 0.12, CW * 0.12, CW * 0.16, CW * 0.17];
+      const g4Headers = ["Page", "Page Views", "Users", "Sessions", "Eng. Rate", "Avg Eng. Time"];
+
+      doc.roundedRect(M, doc.y, CW, 18, 2).fill(C.primary);
+      let g4Hx = M;
+      for (let i = 0; i < g4Headers.length; i++) {
+        doc.font("Helvetica-Bold").fontSize(7).fillColor("#ffffff")
+          .text(g4Headers[i], g4Hx + 5, doc.y + 5, { width: g4Cols[i] - 10, align: i === 0 ? "left" : "right" });
+        g4Hx += g4Cols[i];
+      }
+      doc.y += 18;
+
+      for (let i = 0; i < g4Pages.length; i++) {
+        ensureSpace(doc, 18);
+        const p  = g4Pages[i];
+        const ry = doc.y;
+        doc.rect(M, ry, CW, 16).fill(i % 2 === 0 ? C.bg : C.cardBg);
+        let cx = M;
+        const pg = sanitize(p.page);
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(pg.length > 30 ? pg.slice(0, 30) + "..." : pg, cx + 5, ry + 4, { width: g4Cols[0] - 10 }); cx += g4Cols[0];
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(p.screenPageViews.toLocaleString(),  cx + 5, ry + 4, { width: g4Cols[1] - 10, align: "right" }); cx += g4Cols[1];
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(p.totalUsers.toLocaleString(),        cx + 5, ry + 4, { width: g4Cols[2] - 10, align: "right" }); cx += g4Cols[2];
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(p.sessions.toLocaleString(),          cx + 5, ry + 4, { width: g4Cols[3] - 10, align: "right" }); cx += g4Cols[3];
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(`${p.engagementRate}%`,               cx + 5, ry + 4, { width: g4Cols[4] - 10, align: "right" }); cx += g4Cols[4];
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(p.avgEngagementTimeFormatted,         cx + 5, ry + 4, { width: g4Cols[5] - 10, align: "right" });
+        doc.y = ry + 16;
+      }
+      doc.y += 12;
+    }
+
+    // ===== 5. KEYWORD PERFORMANCE =====
+    if (data.keywords && data.keywords.length > 0) {
+      const kws = data.keywords.slice(0, 10);
+      ensureSpace(doc, 60 + kws.length * 16);
+      sectionTitle(doc, "5. Keyword Performance (Top 10)");
+
+      const kwCols    = [CW * 0.34, CW * 0.12, CW * 0.16, CW * 0.10, CW * 0.12, CW * 0.16];
+      const kwHeaders = ["Keyword", "Clicks", "Impressions", "CTR", "Position", "Impact"];
+
+      doc.roundedRect(M, doc.y, CW, 18, 2).fill(C.primary);
+      let kwHx = M;
+      for (let i = 0; i < kwHeaders.length; i++) {
+        doc.font("Helvetica-Bold").fontSize(7).fillColor("#ffffff")
+          .text(kwHeaders[i], kwHx + 5, doc.y + 5, { width: kwCols[i] - 10, align: i === 0 ? "left" : i === kwHeaders.length - 1 ? "left" : "right" });
+        kwHx += kwCols[i];
+      }
+      doc.y += 18;
+
+      for (let i = 0; i < kws.length; i++) {
+        ensureSpace(doc, 18);
+        const kw = kws[i];
+        const ry = doc.y;
+        doc.rect(M, ry, CW, 16).fill(i % 2 === 0 ? C.bg : C.cardBg);
+        let cx = M;
+        const kwText = sanitize(kw.query);
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(kwText.length > 35 ? kwText.slice(0, 35) + "..." : kwText, cx + 5, ry + 4, { width: kwCols[0] - 10 }); cx += kwCols[0];
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(kw.clicks.toLocaleString(),      cx + 5, ry + 4, { width: kwCols[1] - 10, align: "right" }); cx += kwCols[1];
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(kw.impressions.toLocaleString(), cx + 5, ry + 4, { width: kwCols[2] - 10, align: "right" }); cx += kwCols[2];
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(`${kw.ctr}%`,                   cx + 5, ry + 4, { width: kwCols[3] - 10, align: "right" }); cx += kwCols[3];
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(kw.position.toFixed(1),          cx + 5, ry + 4, { width: kwCols[4] - 10, align: "right" }); cx += kwCols[4];
+        let impact = "Tracking keyword.";
+        if      (kw.position <= 3  && kw.ctr >= 5)                          impact = "Strong top-3 — driving traffic.";
+        else if (kw.position >= 11 && kw.position <= 20 && kw.impressions >= 200) impact = "Page 2 — push for quick win.";
+        else if (kw.impressions >= 500 && kw.ctr < 2)                        impact = "High impressions, low CTR.";
+        else if (kw.position <= 10 && kw.clicks >= 50)                       impact = "Solid page-1 ranking.";
+        else if (kw.position > 20)                                            impact = "Low visibility — needs content.";
+        doc.font("Helvetica").fontSize(6.5).fillColor(C.textMuted).text(impact, cx + 5, ry + 4, { width: kwCols[5] - 10 });
+        doc.y = ry + 16;
+      }
+      doc.y += 12;
+    } else {
+      ensureSpace(doc, 50);
+      sectionTitle(doc, "5. Keyword Performance");
+      doc.font("Helvetica").fontSize(8.5).fillColor(C.textLight)
+        .text("No keyword data available for this period.", M + 4, doc.y);
+      doc.y += 20;
+    }
+
+    // ===== 6. BACKLINKS =====
+    ensureSpace(doc, 60);
+    sectionTitle(doc, "6. Backlinks");
+
     if (bl && (bl.current > 0 || bl.previous > 0)) {
       const blColWidths = [CW * 0.40, CW * 0.30, CW * 0.30];
-      const blHeaders = ["Metric", "Current", "Change"];
-
+      const blHeaders   = ["Metric", "Current", "Change"];
       doc.roundedRect(M, doc.y, CW, 18, 2).fill(C.primary);
       let bhx = M;
       for (let i = 0; i < blHeaders.length; i++) {
@@ -445,222 +573,93 @@ export function generatePdfReport(data: PdfReportData): Promise<Buffer> {
         bhx += blColWidths[i];
       }
       doc.y += 18;
-
       const blRows = [
-        { label: "Total Backlinks", current: bl.current, delta: bl.delta },
+        { label: "Total Backlinks",   current: bl.current,         delta: bl.delta },
         { label: "Referring Domains", current: bl.referringDomains, delta: bl.referringDomainsDelta },
       ];
-
       for (let i = 0; i < blRows.length; i++) {
         ensureSpace(doc, 18);
         const row = blRows[i];
-        const ry = doc.y;
+        const ry  = doc.y;
         doc.rect(M, ry, CW, 16).fill(i % 2 === 0 ? C.bg : C.cardBg);
-
-        doc.font("Helvetica").fontSize(7).fillColor(C.text)
-          .text(row.label, M + 6, ry + 4, { width: blColWidths[0] - 12 });
-        doc.font("Helvetica").fontSize(7).fillColor(C.text)
-          .text(row.current.toLocaleString(), M + blColWidths[0] + 6, ry + 4, { width: blColWidths[1] - 12, align: "right" });
-        const deltaColor = row.delta > 0 ? C.positive : row.delta < 0 ? C.danger : C.neutral;
-        const deltaStr = row.delta > 0 ? `+${row.delta}` : row.delta < 0 ? `${row.delta}` : "stable";
-        doc.font("Helvetica-Bold").fontSize(7).fillColor(deltaColor)
-          .text(deltaStr, M + blColWidths[0] + blColWidths[1] + 6, ry + 4, { width: blColWidths[2] - 12, align: "right" });
-
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(row.label, M + 6, ry + 4, { width: blColWidths[0] - 12 });
+        doc.font("Helvetica").fontSize(7).fillColor(C.text).text(row.current.toLocaleString(), M + blColWidths[0] + 6, ry + 4, { width: blColWidths[1] - 12, align: "right" });
+        const dColor = row.delta > 0 ? C.positive : row.delta < 0 ? C.danger : C.neutral;
+        const dStr   = row.delta > 0 ? `+${row.delta}` : row.delta < 0 ? `${row.delta}` : "stable";
+        doc.font("Helvetica-Bold").fontSize(7).fillColor(dColor).text(dStr, M + blColWidths[0] + blColWidths[1] + 6, ry + 4, { width: blColWidths[2] - 12, align: "right" });
         doc.y = ry + 16;
       }
       doc.y += 14;
     } else {
       doc.font("Helvetica").fontSize(8.5).fillColor(C.textLight)
-        .text("Backlink data unavailable. Verify API credentials in Settings.", M + 4, doc.y);
+        .text("Backlink data unavailable. Configure SEMrush or DataForSEO API.", M + 4, doc.y);
       doc.y += 20;
     }
 
-    // ===== 5c. KEYWORD RANKINGS TABLE =====
-    ensureSpace(doc, 80);
-    sectionTitle(doc, "Keyword Rankings");
+    // ===== 7. WHAT CHANGED =====
+    ensureSpace(doc, 90);
+    sectionTitle(doc, "7. What Changed");
 
-    const kw = data.metrics.keywords;
-    const kwDist = data.keywordDistribution;
-    const kwTotal = kwDist.top3 + kwDist.top10 + kwDist.top20 + kwDist.top50 + kwDist.top100 + kwDist.beyond;
-
-    if (kw.total > 0 || kwTotal > 0) {
-      const top3 = kwDist.top3 || 0;
-      const p2Count = kwDist.top20 || 0;
-      const kwColWidths = [CW * 0.40, CW * 0.30, CW * 0.30];
-      const kwHeaders = ["Metric", "Value", "Detail"];
-
-      doc.roundedRect(M, doc.y, CW, 18, 2).fill(C.primary);
-      let khx = M;
-      for (let i = 0; i < kwHeaders.length; i++) {
-        doc.font("Helvetica-Bold").fontSize(7).fillColor("#ffffff")
-          .text(kwHeaders[i], khx + 6, doc.y + 5, { width: kwColWidths[i] - 12, align: i === 0 ? "left" : "right" });
-        khx += kwColWidths[i];
-      }
-      doc.y += 18;
-
-      const kwRows = [
-        { label: "Total Tracked", value: kw.total.toLocaleString(), detail: "" },
-        { label: "Top 3", value: top3.toLocaleString(), detail: "" },
-        { label: "Top 10", value: kw.top10.toLocaleString(), detail: `${kw.top10Percentage}% of total` },
-        { label: "Improved", value: kw.improved.toLocaleString(), detail: "" },
-        { label: "Declined", value: kw.declined.toLocaleString(), detail: "" },
-        { label: "Net Movement", value: kw.netGrowth >= 0 ? `+${kw.netGrowth}` : `${kw.netGrowth}`, detail: kw.netGrowth > 0 ? "Improving" : kw.netGrowth < 0 ? "Declining" : "Stable" },
-        { label: "Page 2 Opportunities (11-20)", value: p2Count.toLocaleString(), detail: "Positions 11-20" },
-      ];
-
-      for (let i = 0; i < kwRows.length; i++) {
-        ensureSpace(doc, 18);
-        const row = kwRows[i];
-        const ry = doc.y;
-        doc.rect(M, ry, CW, 16).fill(i % 2 === 0 ? C.bg : C.cardBg);
-
-        doc.font("Helvetica").fontSize(7).fillColor(C.text)
-          .text(row.label, M + 6, ry + 4, { width: kwColWidths[0] - 12 });
-        doc.font("Helvetica").fontSize(7).fillColor(C.text)
-          .text(row.value, M + kwColWidths[0] + 6, ry + 4, { width: kwColWidths[1] - 12, align: "right" });
-        if (row.detail) {
-          doc.font("Helvetica").fontSize(7).fillColor(C.textMuted)
-            .text(row.detail, M + kwColWidths[0] + kwColWidths[1] + 6, ry + 4, { width: kwColWidths[2] - 12, align: "right" });
-        }
-
-        doc.y = ry + 16;
-      }
-      doc.y += 14;
-    } else {
-      doc.font("Helvetica").fontSize(8.5).fillColor(C.textLight)
-        .text("Keyword ranking data unavailable for this period.", M + 4, doc.y);
-      doc.y += 20;
+    const changes: { label: string; value: number; display: string }[] = [
+      { label: "Traffic Growth",     value: data.metrics.traffic.growthRate, display: formatDelta(data.metrics.traffic.growthRate, "%") },
+      { label: "Keyword Net Growth", value: data.metrics.keywords.netGrowth, display: data.metrics.keywords.netGrowth !== 0 ? formatDelta(data.metrics.keywords.netGrowth, " keywords") : "Stable" },
+    ];
+    if (searchValid) {
+      const gap = data.metrics.search.ctrGap;
+      changes.push({ label: "CTR vs Benchmark", value: gap <= 0 ? 1 : -1, display: gap <= 0 ? `+${Math.abs(gap)}% above target` : `-${gap}% below target` });
+    }
+    if (convMetrics && (convMetrics.current > 0 || convMetrics.previous > 0)) {
+      changes.push({ label: "Conversion Growth", value: convMetrics.growthRate, display: formatDelta(convMetrics.growthRate, "%") });
     }
 
-    // ===== 5d. AI REFERRERS =====
-    ensureSpace(doc, 60);
-    sectionTitle(doc, "AI Traffic Sources");
-
-    if (data.aiReferrers && data.aiReferrers.length > 0) {
-      const aiRowCount = Math.min(data.aiReferrers.length, 10);
-      ensureSpace(doc, 40 + aiRowCount * 18);
-
-      const totalAiUsers = data.aiReferrers.reduce((s, r) => s + r.totalUsers, 0);
-      const totalAiSessions = data.aiReferrers.reduce((s, r) => s + r.sessions, 0);
-      doc.font("Helvetica").fontSize(7).fillColor(C.textLight)
-        .text(`${totalAiUsers.toLocaleString()} users | ${totalAiSessions.toLocaleString()} sessions from ${data.aiReferrers.length} AI source${data.aiReferrers.length > 1 ? "s" : ""}`, M, doc.y, { width: CW });
-      doc.y += 8;
-
-      const aiCols = [CW * 0.34, CW * 0.20, CW * 0.22, CW * 0.24];
-      const aiHeaders = ["AI Source", "Users", "Sessions", "% of Total"];
-
-      doc.roundedRect(M, doc.y, CW, 18, 2).fill(C.primary);
-      let ahx = M;
-      for (let i = 0; i < aiHeaders.length; i++) {
-        doc.font("Helvetica-Bold").fontSize(7).fillColor("#ffffff")
-          .text(aiHeaders[i], ahx + 6, doc.y + 5, { width: aiCols[i] - 12, align: i === 0 ? "left" : "right" });
-        ahx += aiCols[i];
-      }
-      doc.y += 18;
-
-      for (let i = 0; i < aiRowCount; i++) {
-        ensureSpace(doc, 18);
-        const ref = data.aiReferrers[i];
-        const ary = doc.y;
-        doc.rect(M, ary, CW, 16).fill(i % 2 === 0 ? C.bg : C.cardBg);
-
-        let acx = M;
-        doc.font("Helvetica").fontSize(7).fillColor(C.text)
-          .text(sanitize(ref.source), acx + 6, ary + 4, { width: aiCols[0] - 12 });
-        acx += aiCols[0];
-        doc.font("Helvetica").fontSize(7).fillColor(C.text)
-          .text(ref.totalUsers.toLocaleString(), acx + 6, ary + 4, { width: aiCols[1] - 12, align: "right" });
-        acx += aiCols[1];
-        doc.font("Helvetica").fontSize(7).fillColor(C.text)
-          .text(ref.sessions.toLocaleString(), acx + 6, ary + 4, { width: aiCols[2] - 12, align: "right" });
-        acx += aiCols[2];
-        const pctStr = ref.percentOfTotal != null ? `${ref.percentOfTotal}%` : "--";
-        doc.font("Helvetica").fontSize(7).fillColor(C.text)
-          .text(pctStr, acx + 6, ary + 4, { width: aiCols[3] - 12, align: "right" });
-        doc.y = ary + 16;
-      }
-
-      doc.y += 14;
-    } else {
-      doc.font("Helvetica").fontSize(8.5).fillColor(C.textLight)
-        .text("No AI platform traffic detected this period.", M + 4, doc.y);
-      doc.y += 20;
+    for (const change of changes) {
+      ensureSpace(doc, 28);
+      const rowY  = doc.y;
+      const color = change.label === "CTR vs Benchmark"
+        ? (change.value > 0 ? C.positive : C.danger)
+        : (change.value > 0 ? C.positive : change.value < 0 ? C.danger : C.neutral);
+      doc.roundedRect(M, rowY, CW, 22, 3).fill(C.bg);
+      doc.font("Helvetica").fontSize(8.5).fillColor(C.text).text(change.label, M + 12, rowY + 6, { width: 150 });
+      doc.font("Helvetica-Bold").fontSize(8.5).fillColor(color).text(change.display, M + 170, rowY + 6, { width: CW - 180 });
+      doc.y = rowY + 26;
     }
+    doc.y += 10;
 
-    // ===== 6. CHART =====
-    const chartH = 120;
-    const hasTrafficChart = data.dailyTrends.ga4Daily.length > 1;
-    const hasSearchChart = data.dailyTrends.gscDaily.length > 1;
-
-    if (hasTrafficChart) {
-      ensureSpace(doc, chartH + 30);
-      sectionTitle(doc, "Trend Analysis");
-      const usersData = data.dailyTrends.ga4Daily.map(d => ({ label: d.date, value: d.users }));
-      const sessionsData = data.dailyTrends.ga4Daily.map(d => ({ label: d.date, value: d.sessions }));
-      drawLineChart(doc, M, doc.y + 14, CW, chartH, usersData, C.accent, "Traffic Trend", sessionsData, C.primary, ["Users", "Sessions"]);
-      doc.y += chartH + 28;
-    } else if (hasSearchChart) {
-      ensureSpace(doc, chartH + 30);
-      sectionTitle(doc, "Trend Analysis");
-      const clicksData = data.dailyTrends.gscDaily.map(d => ({ label: d.date, value: d.clicks }));
-      const impData = data.dailyTrends.gscDaily.map(d => ({ label: d.date, value: d.impressions }));
-      drawLineChart(doc, M, doc.y + 14, CW, chartH, clicksData, C.positive, "Search Performance", impData, C.warning, ["Clicks", "Impressions"]);
-      doc.y += chartH + 28;
-    } else {
-      ensureSpace(doc, 50);
-      sectionTitle(doc, "Trend Analysis");
-      doc.roundedRect(M, doc.y, CW, 36, 4).fillAndStroke(C.bg, C.border);
-      doc.font("Helvetica").fontSize(8.5).fillColor(C.textLight)
-        .text("Not enough data to display trend", M, doc.y + 12, { width: CW, align: "center" });
-      doc.y += 44;
-    }
-
-    // ===== DATA AVAILABILITY TABLE =====
+    // ===== 8. DATA AVAILABILITY =====
     ensureSpace(doc, 120);
-    sectionTitle(doc, "Data Availability");
+    sectionTitle(doc, "8. Data Availability");
 
-    const hasGA4Data = data.metrics.traffic.users > 0 || data.metrics.traffic.sessions > 0;
-    const hasGSCData = data.metrics.search.clicks > 0 || data.metrics.search.impressions > 0;
-    const hasSemrushData = data.metrics.keywords.total > 0;
-    const hasDataForSEO = bl && (bl.current > 0 || bl.previous > 0);
-    const hasAiMentions = data.aiReferrers && data.aiReferrers.length > 0;
+    const hasGA4Data  = data.metrics.traffic.users > 0 || data.metrics.traffic.sessions > 0;
+    const hasGSCData  = data.metrics.search.clicks > 0 || data.metrics.search.impressions > 0;
+    const hasKwData   = (data.keywords && data.keywords.length > 0) || data.metrics.keywords.total > 0;
+    const hasBLData   = bl && (bl.current > 0 || bl.previous > 0);
+    const hasAiData   = data.aiReferrers && data.aiReferrers.length > 0;
 
     const statusRows = [
-      { label: "Google Analytics 4", connected: hasGA4Data },
-      { label: "Google Search Console", connected: hasGSCData },
-      { label: "SEMrush", connected: hasSemrushData },
-      { label: "DataForSEO", connected: hasDataForSEO },
-      { label: "AI Mentions", connected: hasAiMentions, altLabels: ["Active", "Not configured"] },
+      { label: "Google Analytics 4 (Users, Sessions)",           connected: hasGA4Data },
+      { label: "Google Search Console (Clicks, Impressions, CTR, Position)", connected: hasGSCData },
+      { label: "GSC Keywords (Top Queries)",                     connected: hasKwData },
+      { label: "Backlinks (SEMrush / DataForSEO)",               connected: !!hasBLData },
+      { label: "AI Referrer Traffic",                            connected: !!hasAiData },
     ];
 
-    const daCols = [CW * 0.55, CW * 0.45];
+    const daCols = [CW * 0.70, CW * 0.30];
     doc.roundedRect(M, doc.y, CW, 18, 2).fill(C.primary);
-    doc.font("Helvetica-Bold").fontSize(7).fillColor("#ffffff")
-      .text("Data Source", M + 6, doc.y + 5, { width: daCols[0] - 12 });
-    doc.font("Helvetica-Bold").fontSize(7).fillColor("#ffffff")
-      .text("Status", M + daCols[0] + 6, doc.y + 5, { width: daCols[1] - 12, align: "right" });
+    doc.font("Helvetica-Bold").fontSize(7).fillColor("#ffffff").text("Data Source",   M + 6,            doc.y + 5, { width: daCols[0] - 12 });
+    doc.font("Helvetica-Bold").fontSize(7).fillColor("#ffffff").text("Status",        M + daCols[0] + 6, doc.y + 5, { width: daCols[1] - 12, align: "right" });
     doc.y += 18;
 
     for (let i = 0; i < statusRows.length; i++) {
       ensureSpace(doc, 18);
-      const row = statusRows[i];
-      const ry = doc.y;
+      const row   = statusRows[i];
+      const ry    = doc.y;
       doc.rect(M, ry, CW, 16).fill(i % 2 === 0 ? C.bg : C.cardBg);
-
-      doc.font("Helvetica").fontSize(7).fillColor(C.text)
-        .text(row.label, M + 6, ry + 4, { width: daCols[0] - 12 });
-
-      const connLabel = row.altLabels
-        ? (row.connected ? row.altLabels[0] : row.altLabels[1])
-        : (row.connected ? "Connected" : "No data");
+      doc.font("Helvetica").fontSize(7).fillColor(C.text).text(row.label, M + 6, ry + 4, { width: daCols[0] - 12 });
+      const connLabel = row.connected ? "Connected" : "Unavailable";
       const connColor = row.connected ? C.positive : C.textMuted;
-      doc.font("Helvetica").fontSize(7).fillColor(connColor)
-        .text(connLabel, M + daCols[0] + 6, ry + 4, { width: daCols[1] - 12, align: "right" });
-
+      doc.font("Helvetica").fontSize(7).fillColor(connColor).text(connLabel, M + daCols[0] + 6, ry + 4, { width: daCols[1] - 12, align: "right" });
       doc.y = ry + 16;
     }
-
-    doc.y += 10;
 
     doc.end();
   });
