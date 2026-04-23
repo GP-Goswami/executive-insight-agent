@@ -1084,6 +1084,7 @@ export interface GA4TopPageExtended {
   screenPageViews: number;
   totalUsers: number;
   sessions: number;
+  entrances: number;
   /** Avg engagement time per session in whole seconds (userEngagementDuration / sessions). */
   avgEngagementTimeSeconds: number;
   /** Same value formatted HH:MM:SS. */
@@ -1119,9 +1120,10 @@ export async function getGA4TopPagesExtended(
         metrics: [
           { name: "screenPageViews" },
           { name: "totalUsers" },
-          { name: "userEngagementDuration" }, // replaces averageSessionDuration
+          { name: "userEngagementDuration" },
           { name: "sessions" },
           { name: "engagementRate" },
+          { name: "entrances" },
         ],
         orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }],
         limit: rowLimit.toString(),
@@ -1130,28 +1132,28 @@ export async function getGA4TopPagesExtended(
 
     if (!response.data.rows) return [];
 
-    // Look up userEngagementDuration by NAME in metricHeaders so we don't
-    // depend on GA4 returning metrics in the exact order we requested
-    // (this is the only key the user flagged as "not existing" at fixed index).
     const headers = (response.data.metricHeaders || []) as Array<{ name?: string }>;
-    const idxUserEngDur = headers.findIndex((h) => h?.name === "userEngagementDuration");
+    const idx = (name: string) => headers.findIndex((h) => h?.name === name);
+    const idxUserEngDur = idx("userEngagementDuration");
+    const idxSessions   = idx("sessions");
+    const idxEngRate    = idx("engagementRate");
+    const idxEntrances  = idx("entrances");
 
     return response.data.rows
       .map((row: any) => {
-        const userEngagementDuration =
-          idxUserEngDur >= 0
-            ? parseFloat(row.metricValues?.[idxUserEngDur]?.value || "0")
-            : parseFloat(row.metricValues?.[2]?.value || "0");
-        const sessions = parseInt(row.metricValues?.[3]?.value || "0");
-        // avg engagement time (sec) = userEngagementDuration / sessions  (safe divide)
+        const mv = row.metricValues || [];
+        const userEngagementDuration = parseFloat(mv[idxUserEngDur >= 0 ? idxUserEngDur : 2]?.value || "0");
+        const sessions = parseInt(mv[idxSessions >= 0 ? idxSessions : 3]?.value || "0");
+        const engagementRateRaw = parseFloat(mv[idxEngRate >= 0 ? idxEngRate : 4]?.value || "0");
+        const entrances = parseInt(mv[idxEntrances >= 0 ? idxEntrances : 5]?.value || "0");
         const avgSec = computeAvgEngagementSeconds(userEngagementDuration, sessions);
-        const engagementRateRaw = parseFloat(row.metricValues?.[4]?.value || "0");
 
         return {
           page: row.dimensionValues?.[0]?.value || "/",
-          screenPageViews: parseInt(row.metricValues?.[0]?.value || "0"),
-          totalUsers: parseInt(row.metricValues?.[1]?.value || "0"),
+          screenPageViews: parseInt(mv[0]?.value || "0"),
+          totalUsers: parseInt(mv[1]?.value || "0"),
           sessions,
+          entrances,
           avgEngagementTimeSeconds: avgSec,
           avgEngagementTimeFormatted: formatSecondsToHHMMSS(avgSec),
           engagementRate: Math.round(engagementRateRaw * 10000) / 100,

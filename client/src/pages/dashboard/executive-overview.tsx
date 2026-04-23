@@ -53,9 +53,11 @@ interface OverviewMetrics {
 
 interface TopPage {
   page: string;
-  users: number;
-  sessions: number;
-  conversions: number;
+  screenPageViews: number;
+  totalUsers: number;
+  entrances: number;
+  avgEngagementTimeFormatted: string;
+  engagementRate: number;
 }
 
 interface ApiResponse {
@@ -66,7 +68,7 @@ interface ApiResponse {
 }
 
 export default function ExecutiveOverview() {
-  const { domain, ga4PropertyId } = useDomain();
+  const { domain, ga4PropertyId, gscSiteUrl } = useDomain();
   const [dateRange, setDateRange] = useState<DateRange | undefined>({
     from: subDays(new Date(), 30),
     to: new Date(),
@@ -101,14 +103,14 @@ export default function ExecutiveOverview() {
   const metricsMessage = (metricsResponse as any)?.message;
 
   const { data: topPagesResponse, isLoading: topPagesLoading, error: topPagesError } = useQuery<ApiResponse>({
-    queryKey: ["/api/metrics/top-pages", ga4PropertyId, appliedRange?.from?.toISOString(), appliedRange?.to?.toISOString()],
+    queryKey: ["/api/metrics/ga4/top-pages-extended", ga4PropertyId, appliedRange?.from?.toISOString(), appliedRange?.to?.toISOString()],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (ga4PropertyId) params.set("propertyId", ga4PropertyId);
-      if (domain) params.set("domain", domain);
-      if (appliedRange?.from) params.set("start", appliedRange.from.toISOString());
-      if (appliedRange?.to) params.set("end", appliedRange.to.toISOString());
-      const res = await fetch(`/api/metrics/top-pages?${params}`);
+      if (appliedRange?.from) params.set("start", appliedRange.from.toISOString().slice(0, 10));
+      if (appliedRange?.to) params.set("end", appliedRange.to.toISOString().slice(0, 10));
+      params.set("limit", "10");
+      const res = await fetch(`/api/metrics/ga4/top-pages-extended?${params}`, { credentials: "include" });
       const data = await res.json();
       if (!res.ok) {
         if (data.configured === false || data.configured === true) {
@@ -133,14 +135,21 @@ export default function ExecutiveOverview() {
   const topPagesColumns: Column<TopPage>[] = [
     {
       key: "page",
-      header: "Landing Page",
+      header: "Page",
       render: (row) => (
-        <span className="text-sm font-medium truncate max-w-[300px] block">{row.page}</span>
+        <span className="text-sm font-medium truncate max-w-[260px] block">{row.page}</span>
       ),
     },
-    { key: "users", header: "Users", align: "right" },
-    { key: "sessions", header: "Sessions", align: "right" },
-    { key: "conversions", header: "Conversions", align: "right" },
+    { key: "screenPageViews", header: "Pageviews", align: "right" },
+    { key: "totalUsers", header: "Users", align: "right" },
+    { key: "avgEngagementTimeFormatted", header: "Avg. Time on Page", align: "right" },
+    { key: "entrances", header: "Entrances", align: "right" },
+    {
+      key: "engagementRate",
+      header: "Engagement Rate",
+      align: "right",
+      render: (row) => <span>{row.engagementRate}%</span>,
+    },
   ];
 
   const hasMetrics = metrics && !metricsError && !metricsResponse?.noData;

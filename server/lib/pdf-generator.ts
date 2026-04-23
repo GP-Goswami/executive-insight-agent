@@ -433,10 +433,10 @@ export function generatePdfReport(data: PdfReportData): Promise<Buffer> {
 
       const colWidths = hasGscData
         ? [CW * 0.36, CW * 0.14, CW * 0.20, CW * 0.14, CW * 0.16]
-        : [CW * 0.46, CW * 0.18, CW * 0.18, CW * 0.18];
+        : [CW * 0.55, CW * 0.22, CW * 0.23];
       const headers = hasGscData
         ? ["Page", "Clicks", "Impressions", "CTR", "Position"]
-        : ["Page", "Sessions", "Users", "Conversions"];
+        : ["Page", "Sessions", "Users"];
 
       doc.roundedRect(M, doc.y, CW, 18, 2).fill(C.primary);
       let hx = M;
@@ -464,9 +464,8 @@ export function generatePdfReport(data: PdfReportData): Promise<Buffer> {
           doc.font("Helvetica").fontSize(7).fillColor(C.text).text(p.position.toString(),          cx + 6, ry + 4, { width: colWidths[4] - 12, align: "right" });
         } else {
           const ga4p = p as any;
-          doc.font("Helvetica").fontSize(7).fillColor(C.text).text((ga4p.sessions    || 0).toLocaleString(), cx + 6, ry + 4, { width: colWidths[1] - 12, align: "right" }); cx += colWidths[1];
-          doc.font("Helvetica").fontSize(7).fillColor(C.text).text((ga4p.users       || 0).toLocaleString(), cx + 6, ry + 4, { width: colWidths[2] - 12, align: "right" }); cx += colWidths[2];
-          doc.font("Helvetica").fontSize(7).fillColor(C.text).text((ga4p.conversions || 0).toLocaleString(), cx + 6, ry + 4, { width: colWidths[3] - 12, align: "right" });
+          doc.font("Helvetica").fontSize(7).fillColor(C.text).text((ga4p.sessions || 0).toLocaleString(), cx + 6, ry + 4, { width: colWidths[1] - 12, align: "right" }); cx += colWidths[1];
+          doc.font("Helvetica").fontSize(7).fillColor(C.text).text((ga4p.users    || 0).toLocaleString(), cx + 6, ry + 4, { width: colWidths[2] - 12, align: "right" });
         }
         doc.y = ry + 16;
       }
