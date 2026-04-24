@@ -149,7 +149,7 @@ export default function ReportPreviewPage() {
   const { toast } = useToast();
   const [isDownloading, setIsDownloading] = useState(false);
 
-  const defaultRange: DateRange = { from: subDays(new Date(), 29), to: new Date() };
+  const defaultRange: DateRange = { from: subDays(new Date(), 29), to: subDays(new Date(), 1) };
   const [dateRange, setDateRange] = useState<DateRange | undefined>(defaultRange);
   const [appliedRange, setAppliedRange] = useState<DateRange | undefined>(defaultRange);
 
@@ -356,7 +356,7 @@ export default function ReportPreviewPage() {
 
   // Data availability matrix (RULE 8 - section 10)
   const availability: { source: string; connected: boolean; reason?: string }[] = [
-    { source: "Google Analytics 4 (Users, Sessions, Conversions)", connected: hasTrafficData, reason: !hasTrafficData ? "No GA4 data for selected range" : undefined },
+    { source: "Google Analytics 4 (Users, Sessions)", connected: hasTrafficData, reason: !hasTrafficData ? "No GA4 data for selected range" : undefined },
     { source: "Google Search Console (Clicks, Impressions, CTR, Position)", connected: hasSearchData, reason: !hasSearchData ? "No GSC data for selected range" : undefined },
     { source: "GSC Keywords (Top Queries)", connected: hasKeywords, reason: !hasKeywords ? "No keyword data returned" : undefined },
     { source: "Backlinks (SEMrush / DataForSEO)", connected: hasBacklinksData, reason: !hasBacklinksData ? "Backlink data unavailable — configure SEMrush or DataForSEO API" : undefined },
@@ -583,7 +583,6 @@ export default function ReportPreviewPage() {
                             <>
                               <th className="text-right py-3 px-4 text-muted-foreground font-medium text-xs">Sessions</th>
                               <th className="text-right py-3 px-4 text-muted-foreground font-medium text-xs">Users</th>
-                              <th className="text-right py-3 px-4 text-muted-foreground font-medium text-xs">Conversions</th>
                             </>
                           )}
                         </tr>
@@ -603,7 +602,6 @@ export default function ReportPreviewPage() {
                               <>
                                 <td className="text-right py-2.5 px-4 font-mono text-foreground/80">{fmtNum(p.sessions)}</td>
                                 <td className="text-right py-2.5 px-4 font-mono text-foreground/80">{fmtNum(p.users)}</td>
-                                <td className="text-right py-2.5 px-4 font-mono text-foreground/80">{fmtNum(p.conversions)}</td>
                               </>
                             )}
                           </tr>
@@ -742,11 +740,6 @@ export default function ReportPreviewPage() {
               label="Keyword Net Growth"
               value={m.keywords.netGrowth}
               display={m.keywords.netGrowth > 0 ? `+${m.keywords.netGrowth} keywords` : m.keywords.netGrowth < 0 ? `${m.keywords.netGrowth} keywords` : "Stable"}
-            />
-            <DeltaRow
-              label="Conversions Growth"
-              value={m.conversions.growthRate}
-              display={m.conversions.growthRate > 0 ? `+${m.conversions.growthRate}%` : m.conversions.growthRate < 0 ? `${m.conversions.growthRate}%` : "No change"}
             />
             {hasSearchData && (
               <DeltaRow

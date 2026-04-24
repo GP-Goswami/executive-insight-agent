@@ -71,7 +71,7 @@ export default function ExecutiveOverview() {
   const { domain, ga4PropertyId, gscSiteUrl } = useDomain();
   const [dateRange, setDateRange] = useState<DateRange | undefined>({
     from: subDays(new Date(), 30),
-    to: new Date(),
+    to: subDays(new Date(), 1),
   });
   const [appliedRange, setAppliedRange] = useState<DateRange | undefined>(dateRange);
 

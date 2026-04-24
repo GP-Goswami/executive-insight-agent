@@ -22,7 +22,7 @@ export default function Ga4TrafficPage() {
   const { ga4PropertyId } = useDomain();
   const [dateRange, setDateRange] = useState<DateRange | undefined>({
     from: subDays(new Date(), 30),
-    to: new Date(),
+    to: subDays(new Date(), 1),
   });
   const [appliedRange, setAppliedRange] = useState<DateRange | undefined>(dateRange);
 

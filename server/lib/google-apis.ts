@@ -303,6 +303,9 @@ export interface GSCRankingData {
   clicks: number;
   impressions: number;
   ctr: number;
+  clicksDelta: number;
+  impressionsDelta: number;
+  ctrDelta: number;
   source: "gsc";
 }
 
@@ -665,7 +668,7 @@ export async function getGSCRankings(
       }
     }
 
-    let previousData = new Map<string, number>();
+    let previousData = new Map<string, { position: number; clicks: number; impressions: number; ctr: number }>();
     if (previousStartDate && previousEndDate) {
       try {
         const previousRequestBody: any = {
@@ -673,7 +676,7 @@ export async function getGSCRankings(
           endDate: previousEndDate,
           dimensions: ["query"],
           rowLimit,
-          dataState: "final",
+          dataState: "all",
         };
 
         if (country || device) {
@@ -695,7 +698,12 @@ export async function getGSCRankings(
         if (previousResponse.data.rows) {
           for (const row of previousResponse.data.rows) {
             const query = row.keys?.[0] || "";
-            previousData.set(query, Math.round((row.position || 0) * 10) / 10);
+            previousData.set(query, {
+              position: Math.round((row.position || 0) * 10) / 10,
+              clicks: row.clicks || 0,
+              impressions: row.impressions || 0,
+              ctr: Math.round((row.ctr || 0) * 10000) / 100,
+            });
           }
         }
       } catch (e) {
@@ -705,18 +713,24 @@ export async function getGSCRankings(
 
     const rankings: GSCRankingData[] = [];
     Array.from(currentData.entries()).forEach(([keyword, data]) => {
-      const previousPosition = previousData.get(keyword) || null;
-      const change = previousPosition !== null ? Math.round((previousPosition - data.position) * 10) / 10 : 0;
-      
+      const prev = previousData.get(keyword) || null;
+      const change           = prev ? Math.round((prev.position    - data.position) * 10) / 10 : 0;
+      const clicksDelta      = prev ? data.clicks      - prev.clicks      : 0;
+      const impressionsDelta = prev ? data.impressions - prev.impressions  : 0;
+      const ctrDelta         = prev ? Math.round((data.ctr - prev.ctr) * 100) / 100 : 0;
+
       rankings.push({
         keyword,
         position: data.position,
-        previousPosition,
+        previousPosition: prev?.position ?? null,
         change,
         url: data.page,
         clicks: data.clicks,
         impressions: data.impressions,
         ctr: data.ctr,
+        clicksDelta,
+        impressionsDelta,
+        ctrDelta,
         source: "gsc",
       });
     });

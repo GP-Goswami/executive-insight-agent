@@ -28,7 +28,7 @@ interface ShareLink {
 export default function ExportsPage() {
   const [dateRange, setDateRange] = useState<DateRange | undefined>({
     from: subDays(new Date(), 30),
-    to: new Date(),
+    to: subDays(new Date(), 1),
   });
   const [reportType, setReportType] = useState("executive");
   const [exportFormat, setExportFormat] = useState("pdf");

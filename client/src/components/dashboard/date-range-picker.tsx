@@ -33,8 +33,11 @@ export function DateRangePicker({
   const [activePreset, setActivePreset] = useState<string | null>("Last 30d");
   const [isOpen, setIsOpen] = useState(false);
 
+  // Yesterday is the latest selectable date — today's data is still processing in GSC/GA4
+  const yesterday = subDays(new Date(), 1);
+
   const handlePresetClick = (preset: { label: string; days: number }) => {
-    const to = new Date();
+    const to = yesterday;
     const from = subDays(to, preset.days - 1);
     onDateRangeChange({ from, to });
     setActivePreset(preset.label);
@@ -103,6 +106,9 @@ export function DateRangePicker({
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-auto p-0 bg-card border-white/10" align="end">
+            <div className="px-3 pt-3 pb-1 text-xs text-muted-foreground border-b border-white/10">
+              Date selection available up to <span className="font-medium text-foreground">{format(yesterday, "MMM d, yyyy")}</span> (yesterday)
+            </div>
             <Calendar
               initialFocus
               mode="range"
@@ -111,6 +117,8 @@ export function DateRangePicker({
               onSelect={handleCustomSelect}
               numberOfMonths={2}
               className="bg-card"
+              disabled={{ after: yesterday }}
+              toDate={yesterday}
             />
           </PopoverContent>
         </Popover>

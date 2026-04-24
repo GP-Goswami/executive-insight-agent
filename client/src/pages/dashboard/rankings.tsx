@@ -12,6 +12,9 @@ import { useDomain } from "@/hooks/use-domain";
 import { TrendingUp, TrendingDown, Award, Target, Minus, Database, AlertCircle, Search, MousePointerClick, Eye } from "lucide-react";
 import type { DateRange } from "react-day-picker";
 import { subDays, format } from "date-fns";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from "recharts";
 
 interface GSCRankingData {
   keyword: string;
@@ -22,6 +25,9 @@ interface GSCRankingData {
   clicks: number;
   impressions: number;
   ctr: number;
+  clicksDelta: number;
+  impressionsDelta: number;
+  ctrDelta: number;
   source: "gsc";
 }
 
@@ -65,7 +71,7 @@ export default function RankingsPage() {
   const { domain, gscSiteUrl, ga4PropertyId } = useDomain();
   const [dateRange, setDateRange] = useState<DateRange | undefined>({
     from: subDays(new Date(), 30),
-    to: new Date(),
+    to: subDays(new Date(), 1),
   });
   const [appliedRange, setAppliedRange] = useState<DateRange | undefined>(dateRange);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -173,6 +179,16 @@ export default function RankingsPage() {
     },
   ];
 
+  const Delta = ({ val, suffix = "", inverse = false }: { val: number; suffix?: string; inverse?: boolean }) => {
+    if (val === 0) return <span className="text-xs text-muted-foreground">—</span>;
+    const positive = inverse ? val < 0 : val > 0;
+    return (
+      <span className={`text-xs font-medium ${positive ? "text-green-400" : "text-red-400"}`}>
+        {val > 0 ? "+" : ""}{val}{suffix}
+      </span>
+    );
+  };
+
   const gscColumns: Column<GSCRankingData>[] = [
     {
       key: "keyword",
@@ -184,43 +200,14 @@ export default function RankingsPage() {
       header: "Position",
       align: "right",
       render: (row) => (
-        <div className="flex items-center justify-end gap-2">
-          <span
-            className={
-              row.position <= 3
-                ? "text-green-400 font-bold"
-                : row.position <= 10
-                ? "text-cyan-400"
-                : "text-muted-foreground"
-            }
-          >
-            {row.position}
-          </span>
-          {row.position <= 3 && <Award className="h-4 w-4 text-amber-400" />}
-        </div>
-      ),
-    },
-    {
-      key: "change",
-      header: "Change",
-      align: "right",
-      render: (row) => (
-        <div className="flex items-center justify-end gap-1">
-          {row.change > 0 && <TrendingUp className="h-4 w-4 text-green-400" />}
-          {row.change < 0 && <TrendingDown className="h-4 w-4 text-red-400" />}
-          {row.change === 0 && <Minus className="h-4 w-4 text-muted-foreground" />}
-          <span
-            className={
-              row.change > 0
-                ? "text-green-400"
-                : row.change < 0
-                ? "text-red-400"
-                : "text-muted-foreground"
-            }
-          >
-            {row.change > 0 && "+"}
-            {row.change}
-          </span>
+        <div className="flex flex-col items-end">
+          <div className="flex items-center gap-1">
+            <span className={row.position <= 3 ? "text-green-400 font-bold" : row.position <= 10 ? "text-cyan-400" : "text-muted-foreground"}>
+              {row.position}
+            </span>
+            {row.position <= 3 && <Award className="h-3 w-3 text-amber-400" />}
+          </div>
+          <Delta val={row.change} inverse />
         </div>
       ),
     },
@@ -228,19 +215,34 @@ export default function RankingsPage() {
       key: "clicks",
       header: "Clicks",
       align: "right",
-      render: (row) => <span className="font-mono">{row.clicks.toLocaleString()}</span>,
+      render: (row) => (
+        <div className="flex flex-col items-end">
+          <span className="font-mono">{row.clicks.toLocaleString()}</span>
+          <Delta val={row.clicksDelta} />
+        </div>
+      ),
     },
     {
       key: "impressions",
       header: "Impressions",
       align: "right",
-      render: (row) => <span className="font-mono">{row.impressions.toLocaleString()}</span>,
+      render: (row) => (
+        <div className="flex flex-col items-end">
+          <span className="font-mono">{row.impressions.toLocaleString()}</span>
+          <Delta val={row.impressionsDelta} />
+        </div>
+      ),
     },
     {
       key: "ctr",
       header: "CTR",
       align: "right",
-      render: (row) => <span className="font-mono">{row.ctr}%</span>,
+      render: (row) => (
+        <div className="flex flex-col items-end">
+          <span className="font-mono">{row.ctr}%</span>
+          <Delta val={row.ctrDelta} suffix="%" />
+        </div>
+      ),
     },
     {
       key: "url",
@@ -338,6 +340,18 @@ export default function RankingsPage() {
   const semrushData = Array.isArray(semrushResponse) ? semrushResponse : [];
   const semrushHasData = semrushData.length > 0;
 
+  // Apply filters to GSC data
+  const filteredGscData = gscData.filter((row) => {
+    if (filters.keyword && !row.keyword.toLowerCase().includes(filters.keyword.toLowerCase())) return false;
+    if (filters.positionRange) {
+      const range = filters.positionRange;
+      if (range === "51+") return row.position > 50;
+      const [min, max] = range.split("-").map(Number);
+      if (row.position < min || row.position > max) return false;
+    }
+    return true;
+  });
+
   const isLoading = dataSource === "gsc" ? gscLoading : semrushLoading;
   const currentData = dataSource === "gsc" ? gscData : semrushData;
   const hasData = dataSource === "gsc" ? gscHasData : semrushHasData;
@@ -347,6 +361,16 @@ export default function RankingsPage() {
   const improved = currentData.filter((r) => r.change > 0).length;
   const declined = currentData.filter((r) => r.change < 0).length;
   const avgPosition = hasData ? currentData.reduce((acc, r) => acc + r.position, 0) / currentData.length : 0;
+
+  // Chart: top 10 keywords by clicks
+  const chartData = [...gscData]
+    .sort((a, b) => b.clicks - a.clicks)
+    .slice(0, 10)
+    .map((row) => ({
+      keyword: row.keyword.length > 18 ? row.keyword.slice(0, 18) + "…" : row.keyword,
+      Clicks: row.clicks,
+      Impressions: row.impressions,
+    }));
 
   const needsConfiguration = (dataSource === "gsc" && gscNotConfigured) || (dataSource === "semrush" && !domain);
 
@@ -457,6 +481,40 @@ export default function RankingsPage() {
                 </Card>
               </div>
 
+              {/* Chart — top 10 keywords by clicks */}
+              {gscHasData && chartData.length > 0 && (
+                <Card className="border-white/10 bg-card/50 backdrop-blur-sm">
+                  <CardHeader>
+                    <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+                      Top 10 Keywords by Clicks &amp; Impressions
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <ResponsiveContainer width="100%" height={240}>
+                      <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 60 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                        <XAxis
+                          dataKey="keyword"
+                          tick={{ fill: "#94a3b8", fontSize: 11 }}
+                          angle={-35}
+                          textAnchor="end"
+                          interval={0}
+                        />
+                        <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} width={50} />
+                        <Tooltip
+                          contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e3a5f", borderRadius: 6 }}
+                          labelStyle={{ color: "#e2e8f0" }}
+                          itemStyle={{ color: "#94a3b8" }}
+                        />
+                        <Legend wrapperStyle={{ color: "#94a3b8", fontSize: 12, paddingTop: 8 }} />
+                        <Bar dataKey="Clicks" fill="#2563eb" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="Impressions" fill="#ca8a04" radius={[3, 3, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              )}
+
               <FilterPanel
                 filters={filterConfig}
                 values={filters}
@@ -468,15 +526,20 @@ export default function RankingsPage() {
                 <CardHeader className="flex flex-row items-center justify-between gap-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
                     Keyword Rankings from GSC
+                    {(filters.keyword || filters.positionRange) && (
+                      <span className="ml-2 text-xs text-cyan-400 normal-case">
+                        {filteredGscData.length} of {gscData.length} shown
+                      </span>
+                    )}
                   </CardTitle>
                   <div className="flex items-center gap-4 text-sm text-muted-foreground">
                     <div className="flex items-center gap-1">
                       <MousePointerClick className="h-4 w-4" />
-                      <span>Total Clicks: {gscData.reduce((sum, r) => sum + r.clicks, 0).toLocaleString()}</span>
+                      <span>Total Clicks: {filteredGscData.reduce((sum, r) => sum + r.clicks, 0).toLocaleString()}</span>
                     </div>
                     <div className="flex items-center gap-1">
                       <Eye className="h-4 w-4" />
-                      <span>Total Impressions: {gscData.reduce((sum, r) => sum + r.impressions, 0).toLocaleString()}</span>
+                      <span>Total Impressions: {filteredGscData.reduce((sum, r) => sum + r.impressions, 0).toLocaleString()}</span>
                     </div>
                   </div>
                 </CardHeader>
@@ -490,11 +553,11 @@ export default function RankingsPage() {
                   ) : (
                     <DataTable
                       columns={gscColumns}
-                      data={gscData}
+                      data={filteredGscData}
                       isLoading={gscLoading}
                       testIdPrefix="gsc-rankings"
                       pageSize={10}
-                      totalItems={gscData.length}
+                      totalItems={filteredGscData.length}
                     />
                   )}
                 </CardContent>
