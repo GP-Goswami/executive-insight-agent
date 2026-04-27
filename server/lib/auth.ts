@@ -60,6 +60,8 @@ export function setupAuth(app: Express): void {
 declare module "express-session" {
   interface SessionData {
     userId: string;
+    oauthNonce: string;
+    oauthFlow: "login" | "connect";
   }
 }
 

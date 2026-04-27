@@ -1098,7 +1098,6 @@ export interface GA4TopPageExtended {
   screenPageViews: number;
   totalUsers: number;
   sessions: number;
-  entrances: number;
   /** Avg engagement time per session in whole seconds (userEngagementDuration / sessions). */
   avgEngagementTimeSeconds: number;
   /** Same value formatted HH:MM:SS. */
@@ -1137,7 +1136,6 @@ export async function getGA4TopPagesExtended(
           { name: "userEngagementDuration" },
           { name: "sessions" },
           { name: "engagementRate" },
-          { name: "entrances" },
         ],
         orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }],
         limit: rowLimit.toString(),
@@ -1151,7 +1149,6 @@ export async function getGA4TopPagesExtended(
     const idxUserEngDur = idx("userEngagementDuration");
     const idxSessions   = idx("sessions");
     const idxEngRate    = idx("engagementRate");
-    const idxEntrances  = idx("entrances");
 
     return response.data.rows
       .map((row: any) => {
@@ -1159,7 +1156,6 @@ export async function getGA4TopPagesExtended(
         const userEngagementDuration = parseFloat(mv[idxUserEngDur >= 0 ? idxUserEngDur : 2]?.value || "0");
         const sessions = parseInt(mv[idxSessions >= 0 ? idxSessions : 3]?.value || "0");
         const engagementRateRaw = parseFloat(mv[idxEngRate >= 0 ? idxEngRate : 4]?.value || "0");
-        const entrances = parseInt(mv[idxEntrances >= 0 ? idxEntrances : 5]?.value || "0");
         const avgSec = computeAvgEngagementSeconds(userEngagementDuration, sessions);
 
         return {
@@ -1167,7 +1163,6 @@ export async function getGA4TopPagesExtended(
           screenPageViews: parseInt(mv[0]?.value || "0"),
           totalUsers: parseInt(mv[1]?.value || "0"),
           sessions,
-          entrances,
           avgEngagementTimeSeconds: avgSec,
           avgEngagementTimeFormatted: formatSecondsToHHMMSS(avgSec),
           engagementRate: Math.round(engagementRateRaw * 10000) / 100,

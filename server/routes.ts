@@ -48,7 +48,15 @@ import {
 import { eq, desc } from "drizzle-orm";
 import { db } from "./db";
 import { fetchWithCache, clearProviderCache, getCacheStatus } from "./lib/cache";
-import { ga4Data, gscData, semrushData, backlinkData } from "@shared/schema";
+import { ga4Data, gscData, semrushData, backlinkData, googleOAuthTokens, users } from "@shared/schema";
+import {
+  isOAuthConfigured,
+  generateAuthUrl,
+  exchangeCode,
+  getGoogleUserInfo,
+  listUserGA4Properties,
+  listUserGSCSites,
+} from "./lib/google-oauth";
 
 const ga4PropertyCache = new Map<string, string>();
 
@@ -1744,6 +1752,175 @@ export async function registerRoutes(
         ? `Google APIs configured with ${sites.length} verified sites`
         : "Google service account not configured. Add GOOGLE_SERVICE_ACCOUNT_JSON to secrets.",
     });
+  });
+
+  // ─── GOOGLE OAUTH FLOW ───────────────────────────────────────────────────────
+
+  // Helper: upsert google_oauth_tokens for a given userId
+  async function saveGoogleTokens(userId: string, tokens: any, email: string) {
+    const existing = await db
+      .select({ id: googleOAuthTokens.id })
+      .from(googleOAuthTokens)
+      .where(eq(googleOAuthTokens.userId, userId))
+      .limit(1);
+
+    if (existing.length > 0) {
+      await db
+        .update(googleOAuthTokens)
+        .set({
+          googleEmail: email,
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token || undefined,
+          expiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+          scopes: tokens.scope || "",
+          updatedAt: new Date(),
+        })
+        .where(eq(googleOAuthTokens.userId, userId));
+    } else {
+      await db.insert(googleOAuthTokens).values({
+        userId,
+        googleEmail: email,
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token || null,
+        expiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+        scopes: tokens.scope || "",
+      });
+    }
+  }
+
+  // Login via Google (unauthenticated) — find or create account then redirect to dashboard
+  app.get("/api/auth/google/login", (req, res) => {
+    if (!isOAuthConfigured()) {
+      return res.redirect("/login?google=not_configured");
+    }
+    const nonce = randomBytes(16).toString("hex");
+    req.session.oauthNonce = nonce;
+    req.session.oauthFlow = "login";
+    res.redirect(generateAuthUrl(nonce));
+  });
+
+  // Connect Google to an already-logged-in account (Settings page)
+  app.get("/api/auth/google/connect", isAuthenticated, (req, res) => {
+    if (!isOAuthConfigured()) {
+      return res.redirect("/settings?google=not_configured");
+    }
+    const nonce = randomBytes(16).toString("hex");
+    req.session.oauthNonce = nonce;
+    req.session.oauthFlow = "connect";
+    res.redirect(generateAuthUrl(nonce));
+  });
+
+  // Shared OAuth callback — handles both login and connect flows
+  app.get("/api/auth/google/callback", async (req, res) => {
+    const { code, state, error } = req.query as Record<string, string>;
+    const flow = req.session.oauthFlow;
+
+    if (error) {
+      return res.redirect(flow === "login" ? "/login?google=denied" : "/settings?google=denied");
+    }
+    if (!code || !state) {
+      return res.redirect(flow === "login" ? "/login?google=error" : "/settings?google=error&msg=missing_params");
+    }
+    // CSRF: state must match the nonce we stored in session
+    if (state !== req.session.oauthNonce) {
+      return res.redirect(flow === "login" ? "/login?google=error" : "/settings?google=error&msg=invalid_state");
+    }
+
+    try {
+      const tokens = await exchangeCode(code);
+      if (!tokens.access_token) throw new Error("No access token returned");
+
+      const userInfo = await getGoogleUserInfo(tokens.access_token);
+      const googleEmail = userInfo.email || "";
+
+      // Clear nonce from session
+      delete req.session.oauthNonce;
+      delete req.session.oauthFlow;
+
+      if (flow === "login") {
+        // Find existing user by Google email, or create a new account
+        const [existing] = await db
+          .select()
+          .from(users)
+          .where(eq(users.email, googleEmail))
+          .limit(1);
+
+        let userId: string;
+        if (existing) {
+          userId = existing.id;
+        } else {
+          const [newUser] = await db
+            .insert(users)
+            .values({
+              email: googleEmail,
+              firstName: userInfo.given_name || null,
+              lastName: userInfo.family_name || null,
+              profileImageUrl: userInfo.picture || null,
+            })
+            .returning();
+          userId = newUser.id;
+        }
+
+        await saveGoogleTokens(userId, tokens, googleEmail);
+        req.session.userId = userId;
+        return res.redirect("/dashboard");
+      } else {
+        // Connect flow: link tokens to the already-authenticated user
+        const userId = req.session.userId;
+        if (!userId) return res.redirect("/login?error=session_expired");
+
+        await saveGoogleTokens(userId, tokens, googleEmail);
+        return res.redirect("/settings?google=connected");
+      }
+    } catch (err: any) {
+      console.error("[OAuth callback] Error:", err);
+      const dest = flow === "login" ? "/login" : "/settings";
+      res.redirect(`${dest}?google=error&msg=${encodeURIComponent(err.message)}`);
+    }
+  });
+
+  // Get connected Google account info + available properties and sites
+  app.get("/api/google/account", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.session.userId!;
+      const [token] = await db
+        .select()
+        .from(googleOAuthTokens)
+        .where(eq(googleOAuthTokens.userId, userId))
+        .limit(1);
+
+      if (!token) {
+        return res.json({ connected: false });
+      }
+
+      const [ga4Properties, gscSites] = await Promise.all([
+        listUserGA4Properties(userId),
+        listUserGSCSites(userId),
+      ]);
+
+      res.json({
+        connected: true,
+        googleEmail: token.googleEmail,
+        ga4Properties,
+        gscSites,
+        connectedAt: token.createdAt,
+      });
+    } catch (err: any) {
+      console.error("[OAuth] /api/google/account error:", err);
+      res.json({ connected: false, error: err.message });
+    }
+  });
+
+  // Disconnect Google account — removes stored tokens
+  app.delete("/api/google/disconnect", isAuthenticated, async (req, res) => {
+    try {
+      await db
+        .delete(googleOAuthTokens)
+        .where(eq(googleOAuthTokens.userId, req.session.userId!));
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // GSC Sites list

@@ -24,3 +24,18 @@ export const pool = new Pool({
 });
 
 export const db = drizzle(pool, { schema });
+
+// Ensure google_oauth_tokens table exists (auto-migration on startup)
+pool.query(`
+  CREATE TABLE IF NOT EXISTS google_oauth_tokens (
+    id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id VARCHAR NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    google_email VARCHAR NOT NULL,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT,
+    expires_at TIMESTAMP,
+    scopes TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+  )
+`).catch((err: Error) => console.error("[db] google_oauth_tokens migration error:", err));

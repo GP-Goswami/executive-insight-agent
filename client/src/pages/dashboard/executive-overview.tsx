@@ -55,7 +55,7 @@ interface TopPage {
   page: string;
   screenPageViews: number;
   totalUsers: number;
-  entrances: number;
+  sessions: number;
   avgEngagementTimeFormatted: string;
   engagementRate: number;
 }
@@ -143,7 +143,7 @@ export default function ExecutiveOverview() {
     { key: "screenPageViews", header: "Pageviews", align: "right" },
     { key: "totalUsers", header: "Users", align: "right" },
     { key: "avgEngagementTimeFormatted", header: "Avg. Time on Page", align: "right" },
-    { key: "entrances", header: "Entrances", align: "right" },
+    { key: "sessions", header: "Sessions", align: "right" },
     {
       key: "engagementRate",
       header: "Engagement Rate",

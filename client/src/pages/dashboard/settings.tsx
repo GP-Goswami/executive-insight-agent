@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
+import { useSearch } from "wouter";
 
 interface SyncStatus {
   provider: string;
@@ -48,10 +49,31 @@ interface DataForSEOStatus {
   message: string;
 }
 
+interface GA4Property {
+  id: string;
+  displayName: string;
+  accountDisplayName: string;
+}
+
+interface GSCSite {
+  siteUrl: string;
+  permissionLevel: string;
+}
+
+interface GoogleAccountStatus {
+  connected: boolean;
+  googleEmail?: string;
+  connectedAt?: string;
+  ga4Properties?: GA4Property[];
+  gscSites?: GSCSite[];
+  error?: string;
+}
+
 export default function SettingsPage() {
   const { user } = useAuth();
   const { domain, setDomain, ga4PropertyId, setGa4PropertyId, gscSiteUrl, setGscSiteUrl } = useDomain();
   const { toast } = useToast();
+  const searchString = useSearch();
   const [notifications, setNotifications] = useState({
     email: true,
     syncAlerts: true,
@@ -88,6 +110,61 @@ export default function SettingsPage() {
   const { data: dataforseoStatus } = useQuery<DataForSEOStatus>({
     queryKey: ["/api/dataforseo/status"],
   });
+
+  const { data: googleAccount, refetch: refetchGoogleAccount, isLoading: googleAccountLoading } = useQuery<GoogleAccountStatus>({
+    queryKey: ["/api/google/account"],
+    queryFn: async () => {
+      const res = await fetch("/api/google/account", { credentials: "include" });
+      return res.json();
+    },
+  });
+
+  // Show toast when returning from Google OAuth callback
+  useEffect(() => {
+    const params = new URLSearchParams(searchString);
+    const googleParam = params.get("google");
+    if (googleParam === "connected") {
+      toast({ title: "Google account connected", description: "Your GA4 properties and GSC sites are ready to select below." });
+      refetchGoogleAccount();
+      window.history.replaceState({}, "", "/settings");
+    } else if (googleParam === "denied") {
+      toast({ title: "Connection cancelled", description: "You did not grant access to Google.", variant: "destructive" });
+      window.history.replaceState({}, "", "/settings");
+    } else if (googleParam === "error") {
+      const msg = params.get("msg") || "Unknown error";
+      toast({ title: "Connection failed", description: msg, variant: "destructive" });
+      window.history.replaceState({}, "", "/settings");
+    } else if (googleParam === "not_configured") {
+      toast({ title: "OAuth not configured", description: "Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to your .env file.", variant: "destructive" });
+      window.history.replaceState({}, "", "/settings");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchString]);
+
+  const handleDisconnectGoogle = async () => {
+    try {
+      const res = await fetch("/api/google/disconnect", { method: "DELETE", credentials: "include" });
+      if (!res.ok) throw new Error("Failed to disconnect");
+      toast({ title: "Google account disconnected" });
+      refetchGoogleAccount();
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const handleSelectGA4Property = (prop: GA4Property) => {
+    setGa4PropertyId(prop.id);
+    queryClient.invalidateQueries({ queryKey: ["/api/metrics/top-pages"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/metrics/overview"] });
+    toast({ title: "GA4 property selected", description: `${prop.displayName} (${prop.id})` });
+  };
+
+  const handleSelectGSCSite = (site: GSCSite) => {
+    setGscSiteUrl(site.siteUrl);
+    queryClient.invalidateQueries({ queryKey: ["/api/metrics/gsc/queries"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/metrics/gsc/pages"] });
+    toast({ title: "GSC site selected", description: site.siteUrl });
+  };
 
   const [syncingProviders, setSyncingProviders] = useState<Record<string, boolean>>({});
 
@@ -210,6 +287,140 @@ export default function SettingsPage() {
           Manage your account, data sources, and preferences
         </p>
       </div>
+
+      {/* Google Account Connect — full width, shown first */}
+      <Card className="border-white/10 bg-card/50 backdrop-blur-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <svg className="h-5 w-5" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+            </svg>
+            Google Account
+          </CardTitle>
+          <CardDescription>
+            Connect your Google account to auto-discover GA4 properties and GSC sites — no manual IDs required
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {googleAccountLoading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-8 w-48" />
+            </div>
+          ) : googleAccount?.connected ? (
+            <div className="space-y-5">
+              {/* Connected account banner */}
+              <div className="flex items-center justify-between p-3 rounded-lg bg-green-500/10 border border-green-500/20">
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 className="h-5 w-5 text-green-400 shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-green-400">Connected</p>
+                    <p className="text-xs text-muted-foreground">{googleAccount.googleEmail}</p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-red-400 hover:text-red-300 hover:bg-red-500/10 gap-1.5"
+                  onClick={handleDisconnectGoogle}
+                >
+                  <AlertCircle className="h-4 w-4" />
+                  Disconnect
+                </Button>
+              </div>
+
+              {/* GA4 Properties */}
+              {googleAccount.ga4Properties && googleAccount.ga4Properties.length > 0 && (
+                <div className="space-y-2">
+                  <Label className="text-sm text-muted-foreground">Select GA4 Property</Label>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {googleAccount.ga4Properties.map((prop) => (
+                      <button
+                        key={prop.id}
+                        onClick={() => handleSelectGA4Property(prop)}
+                        className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors text-sm ${
+                          ga4PropertyId === prop.id
+                            ? "bg-cyan-500/15 border-cyan-500/40 text-cyan-300"
+                            : "bg-muted/30 border-white/5 hover:bg-muted/50 hover:border-white/10"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">{prop.displayName}</p>
+                            <p className="text-xs text-muted-foreground truncate">{prop.accountDisplayName} · ID: {prop.id}</p>
+                          </div>
+                          {ga4PropertyId === prop.id && (
+                            <CheckCircle2 className="h-4 w-4 text-cyan-400 shrink-0" />
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* GSC Sites */}
+              {googleAccount.gscSites && googleAccount.gscSites.length > 0 && (
+                <div className="space-y-2">
+                  <Label className="text-sm text-muted-foreground">Select GSC Site</Label>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {googleAccount.gscSites.map((site) => (
+                      <button
+                        key={site.siteUrl}
+                        onClick={() => handleSelectGSCSite(site)}
+                        className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors text-sm ${
+                          gscSiteUrl === site.siteUrl
+                            ? "bg-green-500/15 border-green-500/40 text-green-300"
+                            : "bg-muted/30 border-white/5 hover:bg-muted/50 hover:border-white/10"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">{site.siteUrl}</p>
+                            <p className="text-xs text-muted-foreground capitalize">{site.permissionLevel?.replace("sitePermissionLevel", "")}</p>
+                          </div>
+                          {gscSiteUrl === site.siteUrl && (
+                            <CheckCircle2 className="h-4 w-4 text-green-400 shrink-0" />
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {googleAccount.ga4Properties?.length === 0 && googleAccount.gscSites?.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  No GA4 properties or GSC sites found in this Google account.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-col items-start gap-4">
+              <p className="text-sm text-muted-foreground">
+                Sign in with Google to automatically discover your GA4 properties and Search Console sites. You won't need to enter any IDs manually.
+              </p>
+              <a href="/api/auth/google/connect">
+                <Button className="gap-2 bg-white text-gray-800 hover:bg-gray-100 border border-gray-200">
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                  </svg>
+                  Sign in with Google
+                </Button>
+              </a>
+              <p className="text-xs text-muted-foreground">
+                You'll be asked to grant read-only access to Google Analytics and Search Console.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="border-white/10 bg-card/50 backdrop-blur-sm">
