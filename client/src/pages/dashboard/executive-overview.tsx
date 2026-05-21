@@ -246,6 +246,7 @@ export default function ExecutiveOverview() {
               icon={Link2}
               accent="purple"
               changeLabel="Estimated (DataForSEO)"
+              showTrend={false}
             />
             <KpiCard
               title="Top 10 Rankings"
@@ -253,6 +254,7 @@ export default function ExecutiveOverview() {
               icon={TrendingUp}
               accent="amber"
               changeLabel="Estimated (DataForSEO)"
+              showTrend={false}
             />
           </div>
 
@@ -270,6 +272,7 @@ export default function ExecutiveOverview() {
               icon={Target}
               accent="green"
               changeLabel="Source: GSC"
+              invertColors
             />
           </div>
         </>

@@ -408,3 +408,91 @@ export function hasSemrushApiKey(): boolean {
   return !!process.env.SEMRUSH_API_KEY;
 }
 
+// ── Competitive SOV ───────────────────────────────────────────────────────────
+
+export interface CompetitorData {
+  domain: string;
+  organicTraffic: number;
+  organicKeywords: number;
+  competition: number;
+  sov: number;
+  isReal: true;
+}
+
+export interface FallbackCompetitorData {
+  domain: string;
+  sov: number;
+  isReal: false;
+  label: string;
+}
+
+export type CompetitorResult = CompetitorData | FallbackCompetitorData;
+
+function getFallbackCompetitors(): FallbackCompetitorData[] {
+  return [
+    { domain: "clutch.co",    sov: 72, isReal: false, label: "Clutch"    },
+    { domain: "goodfirms.co", sov: 65, isReal: false, label: "GoodFirms" },
+  ];
+}
+
+export async function getCompetitorSOV(
+  currentDomain: string,
+  currentDomainImpressions: number,
+  currentDomainClicks: number,
+): Promise<{
+  competitors: CompetitorResult[];
+  currentDomainSOV: number;
+  dataSource: "semrush" | "fallback";
+  semrushAvailable: boolean;
+}> {
+  const currentSOV = currentDomainImpressions > 0
+    ? Math.min(Math.round((currentDomainClicks / (currentDomainImpressions * 0.05)) * 100), 100)
+    : 0;
+
+  const semrushKey = process.env.SEMRUSH_API_KEY;
+  if (!semrushKey) {
+    return { competitors: getFallbackCompetitors(), currentDomainSOV: currentSOV, dataSource: "fallback", semrushAvailable: false };
+  }
+
+  try {
+    const url = new URL("https://api.semrush.com/");
+    url.searchParams.set("type", "domain_organic_organic");
+    url.searchParams.set("key", semrushKey);
+    url.searchParams.set("display_limit", "2");
+    url.searchParams.set("export_columns", "Dn,Or,Ot,Cp");
+    url.searchParams.set("domain", currentDomain);
+    url.searchParams.set("database", "us");
+
+    const response = await fetch(url.toString());
+    if (!response.ok) throw new Error(`SEMrush API error: ${response.status}`);
+
+    const text = await response.text();
+    if (text.startsWith("ERROR")) throw new Error(`SEMrush returned error: ${text}`);
+
+    const dataLines = text.trim().split("\n").slice(1).filter((l) => l.trim());
+    if (dataLines.length === 0) throw new Error("No competitor data returned");
+
+    const competitors: CompetitorData[] = dataLines.slice(0, 2).map((line) => {
+      const [domain, keywords, traffic, competition] = line.split(";");
+      const organicTraffic = parseInt(traffic) || 0;
+      const competitorSOV = Math.min(
+        Math.round((organicTraffic / Math.max(organicTraffic, currentDomainClicks)) * 100),
+        100,
+      );
+      return {
+        domain: domain.trim(),
+        organicTraffic,
+        organicKeywords: parseInt(keywords) || 0,
+        competition: parseFloat(competition) || 0,
+        sov: competitorSOV,
+        isReal: true as const,
+      };
+    });
+
+    return { competitors, currentDomainSOV: currentSOV, dataSource: "semrush", semrushAvailable: true };
+  } catch (error) {
+    console.error("SEMrush competitor fetch failed:", error);
+    return { competitors: getFallbackCompetitors(), currentDomainSOV: currentSOV, dataSource: "fallback", semrushAvailable: false };
+  }
+}
+

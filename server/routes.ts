@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./lib/auth";
-import { getSemrushClient, hasSemrushApiKey } from "./lib/semrush";
+import { getSemrushClient, hasSemrushApiKey, getCompetitorSOV } from "./lib/semrush";
 import {
   hasGoogleCredentials,
   getAnalyticsDataClient,
@@ -2808,6 +2808,14 @@ export async function registerRoutes(
         keywords: snapshot.keywords || [],
         trafficSummary: snapshot.trafficSummary || null,
         ga4TopPages: snapshot.ga4TopPages || [],
+        rootCauses: snapshot.rootCauses || [],
+        brandSplit: snapshot.brandSplit || null,
+        ctrOpportunities: snapshot.ctrOpportunities || [],
+        dataHealth: snapshot.dataHealth || undefined,
+        siteHealth: snapshot.siteHealth || undefined,
+        executiveVerdict: snapshot.executiveVerdict || undefined,
+        competitiveSOV: snapshot.competitiveSOV || undefined,
+        forecast: snapshot.forecast || undefined,
       });
 
       res.setHeader("Content-Type", "application/pdf");
@@ -2817,6 +2825,25 @@ export async function registerRoutes(
     } catch (error) {
       console.error("PDF generation error:", error);
       res.status(500).json({ error: "Failed to generate PDF report" });
+    }
+  });
+
+  // GET /api/competitive-sov — returns real competitor SOV from SEMrush, or fallback estimates
+  app.get("/api/competitive-sov", isAuthenticated, async (req, res) => {
+    try {
+      const { domain, impressions, clicks } = req.query;
+      if (!domain || !impressions || !clicks) {
+        return res.status(400).json({ error: "domain, impressions, clicks required" });
+      }
+      const result = await getCompetitorSOV(
+        domain as string,
+        parseInt(impressions as string) || 0,
+        parseInt(clicks as string) || 0,
+      );
+      res.json(result);
+    } catch (error) {
+      console.error("Competitive SOV error:", error);
+      res.status(500).json({ error: "Failed to fetch competitive SOV" });
     }
   });
 
@@ -2904,6 +2931,16 @@ export async function registerRoutes(
           };
         } catch (e) {
           console.error("Failed to fetch live GSC summary:", e);
+        }
+
+        // Fetch previous period GSC clicks for forecast and trend computation.
+        try {
+          const prevGscStart = format(previousStartDate, "yyyy-MM-dd");
+          const prevGscEnd = format(previousEndDate, "yyyy-MM-dd");
+          const livePrevGsc = await getGSCSummary(gscSiteUrl, prevGscStart, prevGscEnd);
+          aggregatedData.gscPrevious = { clicks: livePrevGsc.clicks };
+        } catch (e) {
+          console.error("Failed to fetch previous period GSC summary:", e);
         }
       }
 

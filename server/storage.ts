@@ -98,6 +98,7 @@ export interface IStorage {
     ga4: { users: number; sessions: number; conversions: number };
     ga4Previous?: { users: number; sessions: number; conversions: number };
     gsc: { clicks: number; impressions: number; ctr: number; avgPosition: number };
+    gscPrevious?: { clicks: number };
     rankings: { totalKeywords: number; top10Keywords: number; improvedKeywords: number; declinedKeywords: number };
     backlinks: { currentBacklinks: number; previousBacklinks: number; currentReferringDomains: number; previousReferringDomains: number };
   }>;
@@ -470,6 +471,21 @@ export class DatabaseStorage implements IStorage {
         )
       );
 
+    let gscPrevious: { clicks: number } | undefined = undefined;
+    if (previousStartDate && previousEndDate) {
+      const [gscPrevSummary] = await db
+        .select({ clicks: sql<number>`COALESCE(SUM(${gscDaily.clicks}), 0)` })
+        .from(gscDaily)
+        .where(
+          and(
+            eq(gscDaily.propertyId, propertyId),
+            gte(gscDaily.date, previousStartDate),
+            lte(gscDaily.date, previousEndDate)
+          )
+        );
+      gscPrevious = { clicks: Number(gscPrevSummary?.clicks || 0) };
+    }
+
     const [rankingSummary] = await db
       .select({
         totalKeywords: sql<number>`COUNT(DISTINCT ${rankDaily.keyword})`,
@@ -577,6 +593,7 @@ export class DatabaseStorage implements IStorage {
         ctr: Number(gscSummary?.ctr || 0),
         avgPosition: Number(gscSummary?.avgPosition || 0),
       },
+      gscPrevious,
       rankings: {
         totalKeywords: Number(rankingSummary?.totalKeywords || 0),
         top10Keywords: Number(rankingSummary?.top10Keywords || 0),

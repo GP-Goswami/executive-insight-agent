@@ -100,30 +100,6 @@ export function generateInsights(normalized: NormalizedData): Insight[] {
     }
   }
 
-  if (quality.hasConversions) {
-    if (conversions.growthRate > 0) {
-      insights.push({
-        type: "positive",
-        category: "conversions",
-        message: `Conversions grew ${conversions.growthRate}% period-over-period (${conversions.previous.toLocaleString()} → ${conversions.current.toLocaleString()})`,
-      });
-    } else if (conversions.growthRate < 0) {
-      insights.push({
-        type: "warning",
-        category: "conversions",
-        message: `Conversions declined ${Math.abs(conversions.growthRate)}% period-over-period (${conversions.previous.toLocaleString()} → ${conversions.current.toLocaleString()})`,
-      });
-    }
-  } else {
-    if (conversions.current === 0 && conversions.previous === 0) {
-      insights.push({
-        type: "neutral",
-        category: "data-quality",
-        message: "No conversion events recorded. Verify GA4 conversion goals are configured and the property is receiving event data.",
-      });
-    }
-  }
-
   if (quality.hasBacklinks) {
     if (backlinks.delta > 0) {
       insights.push({

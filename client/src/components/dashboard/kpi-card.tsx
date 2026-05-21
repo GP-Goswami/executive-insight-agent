@@ -1,5 +1,5 @@
 import { Card, CardContent } from "@/components/ui/card";
-import { TrendingUp, TrendingDown, Minus, LucideIcon } from "lucide-react";
+import { TrendingUp, TrendingDown, ArrowRight, LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface KpiCardProps {
@@ -9,6 +9,8 @@ interface KpiCardProps {
   changeLabel?: string;
   icon?: LucideIcon;
   accent?: "cyan" | "purple" | "green" | "amber";
+  showTrend?: boolean;
+  invertColors?: boolean;
 }
 
 export function KpiCard({
@@ -18,10 +20,16 @@ export function KpiCard({
   changeLabel = "vs last period",
   icon: Icon,
   accent = "cyan",
+  showTrend = true,
+  invertColors = false,
 }: KpiCardProps) {
-  const isPositive = change !== undefined && change > 0;
-  const isNegative = change !== undefined && change < 0;
-  const isNeutral = change === undefined || change === 0;
+  const rawPositive = change !== undefined && change > 0;
+  const rawNegative = change !== undefined && change < 0;
+
+  // For metrics where lower = better (e.g. Avg Position), flip the color meaning
+  const isPositive = invertColors ? rawNegative : rawPositive;
+  const isNegative = invertColors ? rawPositive : rawNegative;
+  const isNeutral = !rawPositive && !rawNegative;
 
   const accentColors = {
     cyan: "group-hover:glow-cyan-sm",
@@ -38,12 +46,12 @@ export function KpiCard({
   };
 
   return (
-    <Card 
+    <Card
       className={cn(
         "group transition-all duration-300 border-white/10 bg-card/50 backdrop-blur-sm",
         accentColors[accent]
       )}
-      data-testid={`kpi-card-${title.toLowerCase().replace(/\s+/g, '-')}`}
+      data-testid={`kpi-card-${title.toLowerCase().replace(/\s+/g, "-")}`}
     >
       <CardContent className="p-6">
         <div className="flex items-start justify-between gap-4">
@@ -54,11 +62,11 @@ export function KpiCard({
             <p className="mt-2 text-3xl font-bold tracking-tight text-foreground font-mono">
               {typeof value === "number" ? value.toLocaleString() : value}
             </p>
-            {change !== undefined && (
+            {showTrend && (
               <div className="mt-2 flex items-center gap-1.5">
                 {isPositive && <TrendingUp className="h-4 w-4 text-green-400" />}
                 {isNegative && <TrendingDown className="h-4 w-4 text-red-400" />}
-                {isNeutral && <Minus className="h-4 w-4 text-muted-foreground" />}
+                {isNeutral && <ArrowRight className="h-4 w-4 text-muted-foreground" />}
                 <span
                   className={cn(
                     "text-sm font-medium",
@@ -67,8 +75,9 @@ export function KpiCard({
                     isNeutral && "text-muted-foreground"
                   )}
                 >
-                  {isPositive && "+"}
-                  {change.toFixed(1)}%
+                  {change !== undefined
+                    ? `${isPositive ? "+" : ""}${change.toFixed(1)}%`
+                    : "—"}
                 </span>
                 <span className="text-xs text-muted-foreground">{changeLabel}</span>
               </div>
