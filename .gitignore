@@ -1,48 +1,88 @@
-# Dependencies
+# # Dependencies
+# node_modules/
+
+# # Build files
+# dist/
+
+# # System files
+# .DS_Store
+
+# # Env & secrets
+# .env
+# .env.*
+
+# # Logs
+# *.log
+
+# # Local configs
+# .config/
+# .local/
+# .claude/
+
+# # Temporary / scratch
+# scratch.txt
+
+# # Assets / sensitive data
+# attached_assets/
+# generated-reports/
+
+# # Server public (if generated)
+# server/public/
+
+# # Vite temp configs
+# vite.config.ts.*
+
+# # Archives
+# *.tar.gz
+
+# # Project-specific docs (optional ignore)
+# SKILL.md
+# DASHBOARD_DATA_GUIDE.md
+
+# # Cache / fingerprint
+# .fingerprint
+
+# # Optional (careful)
+# # Uncomment only if you don't want to track these:
+# # package-lock.json
+# # package.json
+
+# dependencies
 node_modules/
 
-# Build files
-dist/
-
-# System files
-.DS_Store
-
-# Env & secrets
+# env files
 .env
+.env.local
 .env.*
 
-# Logs
+# build files
+dist/
+build/
+.next/
+out/
+
+# logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Local configs
-.config/
-.local/
-.claude/
+# OS files
+.DS_Store
+Thumbs.db
 
-# Temporary / scratch
-scratch.txt
+# vscode
+.vscode/
 
-# Assets / sensitive data
-attached_assets/
-generated-reports/
+# cache
+.cache/
+temp/
+.tmp/
 
-# Server public (if generated)
-server/public/
+# package lock inside node_modules
+node_modules/**
 
-# Vite temp configs
-vite.config.ts.*
+# drizzle generated (optional)
+drizzle/meta/
 
-# Archives
-*.tar.gz
-
-# Project-specific docs (optional ignore)
-SKILL.md
-DASHBOARD_DATA_GUIDE.md
-
-# Cache / fingerprint
-.fingerprint
-
-# Optional (careful)
-# Uncomment only if you don't want to track these:
-# package-lock.json
-# package.json
+script/test-pg-conn.cjs
