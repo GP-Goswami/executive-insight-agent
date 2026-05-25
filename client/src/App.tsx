@@ -26,6 +26,9 @@ import RankingsPage from "@/pages/dashboard/rankings";
 import BacklinksPage from "@/pages/dashboard/backlinks";
 import ExportsPage from "@/pages/dashboard/exports";
 import ReportPreviewPage from "@/pages/dashboard/report-preview";
+import ReviewQueuePage from "@/pages/dashboard/review-queue";
+import AgentConsolePage from "@/pages/dashboard/agent-console";
+import WorkspaceHomePage from "@/pages/dashboard/workspace-home";
 import SettingsPage from "@/pages/dashboard/settings";
 import NotFound from "@/pages/not-found";
 
@@ -76,7 +79,8 @@ function DashboardRouter() {
   return (
     <DashboardLayout>
       <Switch>
-        <Route path="/dashboard" component={ExecutiveOverview} />
+        <Route path="/dashboard" component={WorkspaceHomePage} />
+        <Route path="/dashboard/overview" component={ExecutiveOverview} />
         <Route path="/dashboard/ai-referrers" component={AiReferrersPage} />
         <Route path="/dashboard/traffic" component={Ga4TrafficPage} />
         <Route path="/dashboard/ai-mentions" component={AiMentionsPage} />
@@ -84,6 +88,8 @@ function DashboardRouter() {
         <Route path="/dashboard/rankings" component={RankingsPage} />
         <Route path="/dashboard/backlinks" component={BacklinksPage} />
         <Route path="/dashboard/report-preview" component={ReportPreviewPage} />
+        <Route path="/dashboard/review-queue" component={ReviewQueuePage} />
+        <Route path="/dashboard/agent-console" component={AgentConsolePage} />
         <Route path="/dashboard/exports" component={ExportsPage} />
         <Route path="/dashboard/settings" component={SettingsPage} />
         <Route component={NotFound} />

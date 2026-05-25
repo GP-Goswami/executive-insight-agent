@@ -97,6 +97,8 @@ export interface PdfReportData {
     confidence?: number;
     methodology?: { rawDeclineRate: number | null; trendDecline: number; ctrImprovementRate: number; dataSource: "trend-based" | "default" };
   } | null;
+  /** Optional AI-generated sections from A10 — appended after all existing sections. */
+  aiDraft?: AISectionReportDraft;
 }
 
 const C = {
@@ -1391,8 +1393,140 @@ export function generatePdfReport(data: PdfReportData): Promise<Buffer> {
       doc.y = ry + 16;
     }
 
+    if (data.aiDraft) addAIGeneratedSections(doc, data.aiDraft);
     doc.end();
   });
+}
+
+// ── A10 AI-generated sections (appended after existing PDF content) ───────────
+// These functions are called AFTER generatePdfReport() writes its last page.
+// computedMetrics must always come from the frontend — never recomputed here.
+
+export interface AISectionReportDraft {
+  content: {
+    executiveSummary?: string[];
+    anomaliesSection?: {
+      count?: number;
+      p0Count?: number;
+      p1Count?: number;
+      summary?: string;
+      items?: Array<{ metric?: string; severity?: string; summary?: string; rootCause?: string }>;
+    };
+    recommendationsSection?: {
+      count?: number;
+      items?: Array<{ priority?: number | null; statement?: string; effort?: string | null; impact?: string | null; ownerRole?: string | null }>;
+    };
+    appendix?: {
+      weekNumber?: number;
+      generatedAt?: string;
+      sourceRunIds?: string[];
+    };
+  };
+}
+
+export function addAIGeneratedSections(
+  doc: InstanceType<typeof PDFDocument>,
+  reportDraft: AISectionReportDraft,
+): void {
+  const M = 40;
+  const W = doc.page.width - M * 2;
+
+  function addSectionHeading(title: string) {
+    doc.addPage();
+    doc
+      .rect(0, 0, doc.page.width, 60)
+      .fill("#0f172a");
+    doc
+      .fillColor("#ffffff")
+      .font("Helvetica-Bold")
+      .fontSize(16)
+      .text(cleanText(title), M, 20, { width: W });
+    doc.y = 80;
+    doc.fillColor("#1e293b");
+  }
+
+  // Executive Summary
+  const bullets = reportDraft.content.executiveSummary ?? [];
+  if (bullets.length > 0) {
+    addSectionHeading("AI Executive Summary");
+    doc.fillColor("#0f172a").font("Helvetica").fontSize(10);
+    for (const bullet of bullets) {
+      doc
+        .fillColor("#334155")
+        .text("•  " + cleanText(bullet), M, doc.y, { width: W, lineGap: 4 });
+      doc.moveDown(0.5);
+    }
+  }
+
+  // Anomalies
+  const anom = reportDraft.content.anomaliesSection;
+  if (anom && (anom.count ?? 0) > 0) {
+    addSectionHeading("Anomalies This Week");
+    doc.fillColor("#334155").font("Helvetica").fontSize(10);
+    if (anom.summary) {
+      doc.text(cleanText(anom.summary), M, doc.y, { width: W, lineGap: 4 });
+      doc.moveDown(0.5);
+    }
+    const items = anom.items ?? [];
+    for (const item of items.slice(0, 8)) {
+      const sev = item.severity ?? "P2";
+      const sevColor = sev === "P0" ? "#dc2626" : sev === "P1" ? "#ca8a04" : "#64748b";
+      doc
+        .fillColor(sevColor)
+        .font("Helvetica-Bold")
+        .fontSize(9)
+        .text(`[${sev}] ${cleanText(item.metric ?? "")}`, M, doc.y);
+      if (item.summary ?? item.rootCause) {
+        doc
+          .fillColor("#475569")
+          .font("Helvetica")
+          .fontSize(9)
+          .text(cleanText(item.summary ?? item.rootCause ?? ""), M + 12, doc.y, { width: W - 12, lineGap: 3 });
+      }
+      doc.moveDown(0.4);
+    }
+  }
+
+  // Recommendations
+  const recs = reportDraft.content.recommendationsSection;
+  if (recs && (recs.count ?? 0) > 0) {
+    addSectionHeading("This Week's Actions");
+    const items = recs.items ?? [];
+    for (const rec of items.slice(0, 5)) {
+      const priority = rec.priority ?? "-";
+      const effort = rec.effort ?? "medium";
+      const impact = rec.impact ?? "medium";
+      const impactColor = impact === "high" ? "#16a34a" : impact === "low" ? "#94a3b8" : "#ca8a04";
+
+      doc
+        .fillColor("#0f172a")
+        .font("Helvetica-Bold")
+        .fontSize(10)
+        .text(`${priority}. ${cleanText(rec.statement ?? "")}`, M, doc.y, { width: W });
+      doc
+        .fillColor(impactColor)
+        .font("Helvetica")
+        .fontSize(8)
+        .text(`Effort: ${effort}  |  Impact: ${impact}  |  Owner: ${cleanText(rec.ownerRole ?? "—")}`, M, doc.y, { width: W });
+      doc.moveDown(0.6);
+    }
+  }
+
+  // Appendix
+  const app = reportDraft.content.appendix;
+  if (app) {
+    addSectionHeading("Appendix — Data Sources");
+    doc.fillColor("#475569").font("Helvetica").fontSize(9);
+    if (app.weekNumber) doc.text(`ISO Week: ${app.weekNumber}`, M, doc.y, { width: W });
+    if (app.generatedAt) doc.text(`Generated: ${cleanText(app.generatedAt)}`, M, doc.y, { width: W });
+    if (app.sourceRunIds?.length) {
+      doc.moveDown(0.5);
+      doc.text("Source agent run IDs:", M, doc.y, { width: W });
+      for (const id of app.sourceRunIds) {
+        doc.text(`  ${cleanText(id)}`, M, doc.y, { width: W, lineGap: 2 });
+      }
+    }
+  }
 }
 
 export function buildPdfFilename(domain: string): string {

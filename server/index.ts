@@ -4,6 +4,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { logApiKeyStatus } from "./lib/debug";
+import { initScheduler } from "./orchestrator/scheduler";
 
 const app = express();
 const httpServer = createServer(app);
@@ -102,6 +103,13 @@ app.use((req, res, next) => {
     () => {
       log(`serving on port ${port}`);
       logApiKeyStatus();
+
+      // Scheduler — must never crash the server
+      try {
+        initScheduler();
+      } catch (err) {
+        console.error("[scheduler] Failed to initialize — server continues without scheduler:", err);
+      }
     },
   );
 })();

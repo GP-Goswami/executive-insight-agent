@@ -24,6 +24,9 @@ import {
   LogOut,
   ChevronRight,
   Activity,
+  ClipboardList,
+  Terminal,
+  Home,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -33,8 +36,13 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   {
-    title: "Executive Overview",
+    title: "Workspace",
     url: "/dashboard",
+    icon: Home,
+  },
+  {
+    title: "Executive Overview",
+    url: "/dashboard/overview",
     icon: LayoutDashboard,
   },
   {
@@ -74,6 +82,16 @@ const secondaryItems = [
     title: "Report Preview",
     url: "/dashboard/report-preview",
     icon: FileText,
+  },
+  {
+    title: "Review Queue",
+    url: "/dashboard/review-queue",
+    icon: ClipboardList,
+  },
+  {
+    title: "Agent Console",
+    url: "/dashboard/agent-console",
+    icon: Terminal,
   },
   {
     title: "Exports",

@@ -48,7 +48,7 @@ import {
 import { eq, desc } from "drizzle-orm";
 import { db } from "./db";
 import { fetchWithCache, clearProviderCache, getCacheStatus } from "./lib/cache";
-import { ga4Data, gscData, semrushData, backlinkData, googleOAuthTokens, users } from "@shared/schema";
+import { ga4Data, gscData, semrushData, backlinkData, googleOAuthTokens, users, reportDrafts } from "@shared/schema";
 import {
   isOAuthConfigured,
   generateAuthUrl,
@@ -57,6 +57,13 @@ import {
   listUserGA4Properties,
   listUserGSCSites,
 } from "./lib/google-oauth";
+import anomaliesRouter from "./routes/agents/anomalies";
+import recommendationsRouter from "./routes/agents/recommendations";
+import reportsRouter from "./routes/agents/reports";
+import qaRouter from "./routes/agents/qa";
+import communicationRouter from "./routes/agents/communication";
+import schedulerRouter from "./routes/agents/scheduler";
+import runsRouter from "./routes/agents/runs";
 
 const ga4PropertyCache = new Map<string, string>();
 
@@ -82,6 +89,15 @@ export async function registerRoutes(
   // Setup authentication
   await setupAuth(app);
   registerAuthRoutes(app);
+
+  // AI agent routes (additive) — A08 anomaly detection, A09 recommendations, etc.
+  app.use("/api/agents", anomaliesRouter);
+  app.use("/api/agents", recommendationsRouter);
+  app.use("/api/agents", reportsRouter);
+  app.use("/api/agents", qaRouter);
+  app.use("/api/agents", communicationRouter);
+  app.use("/api/agents", schedulerRouter);
+  app.use("/api/agents", runsRouter);
 
   // ─── SYNC STATUS ENDPOINT ───────────────────────────────────────────────────
   // GET /api/sync/status — returns last-fetched timestamps from cache tables
@@ -2783,13 +2799,29 @@ export async function registerRoutes(
   // so the PDF contains exactly the data the user sees — no re-fetching.
   app.post("/api/generate-pdf", isAuthenticated, async (req, res) => {
     try {
-      const { domain, start, end, snapshot } = req.body;
+      const { domain, start, end, snapshot, tenantId } = req.body;
 
       if (!snapshot || !snapshot.metrics) {
         return res.status(400).json({ error: "snapshot with metrics is required" });
       }
 
       const { generatePdfReport, buildPdfFilename } = await import("./lib/pdf-generator");
+      type AISectionReportDraft = import("./lib/pdf-generator").AISectionReportDraft;
+
+      // Fetch the latest report_draft for this tenant (if tenantId provided).
+      // Falls back gracefully — existing PDF sections are unaffected if no draft exists.
+      let aiDraft: AISectionReportDraft | undefined;
+      if (tenantId) {
+        const [latestDraft] = await db
+          .select({ content: reportDrafts.content })
+          .from(reportDrafts)
+          .where(eq(reportDrafts.tenantId, String(tenantId)))
+          .orderBy(desc(reportDrafts.createdAt))
+          .limit(1);
+        if (latestDraft?.content) {
+          aiDraft = { content: latestDraft.content as AISectionReportDraft["content"] } as AISectionReportDraft;
+        }
+      }
 
       const reportDomain = domain || "unknown-domain";
       const filename = buildPdfFilename(reportDomain);
@@ -2816,6 +2848,7 @@ export async function registerRoutes(
         executiveVerdict: snapshot.executiveVerdict || undefined,
         competitiveSOV: snapshot.competitiveSOV || undefined,
         forecast: snapshot.forecast || undefined,
+        aiDraft,
       });
 
       res.setHeader("Content-Type", "application/pdf");

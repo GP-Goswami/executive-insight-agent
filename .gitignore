@@ -86,3 +86,5 @@ node_modules/**
 drizzle/meta/
 
 script/test-pg-conn.cjs
+CLAUDE.md
+specs/

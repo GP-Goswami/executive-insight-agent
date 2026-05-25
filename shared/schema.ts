@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, decimal, jsonb, pgEnum, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, timestamp, decimal, doublePrecision, jsonb, pgEnum, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -346,3 +346,119 @@ export const messages = pgTable("messages", {
   content: text("content").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+// ─── AI AGENT TABLES (Additive Only) ────────────────────────────────────────
+// New tables for the AI agent layer (specs/A08 anomaly detection, A09, A10).
+// Schema source: CLAUDE.md "Database Schema — New Tables". Additive only —
+// no existing tables are modified. `tenant_id` is a plain varchar (there is no
+// tenants table to reference yet); `run_id` logically maps to agent_runs.id but
+// is left unconstrained to match the spec's column-only definition.
+
+// Agent runs — one row per agent execution; traceability anchor for all claims.
+export const agentRuns = pgTable("agent_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  agentId: text("agent_id").notNull(),
+  status: text("status").notNull().default("pending"),
+  startedAt: timestamp("started_at").defaultNow(),
+  completedAt: timestamp("completed_at"),
+  inputHash: text("input_hash"),
+  output: jsonb("output"),
+  error: text("error"),
+  tokensIn: integer("tokens_in"),
+  tokensOut: integer("tokens_out"),
+});
+
+export const insertAgentRunSchema = createInsertSchema(agentRuns).omit({ id: true });
+export type InsertAgentRun = z.infer<typeof insertAgentRunSchema>;
+export type AgentRun = typeof agentRuns.$inferSelect;
+
+// Agent scratchpad — inter-agent communication; agents write findings here.
+export const agentScratchpad = pgTable("agent_scratchpad", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  agentId: text("agent_id").notNull(),
+  runId: varchar("run_id"),
+  findings: jsonb("findings"),
+  createdAt: timestamp("created_at").defaultNow(),
+  modelUsed: text("model_used"),
+  tokensUsed: integer("tokens_used"),
+});
+
+export const insertAgentScratchpadSchema = createInsertSchema(agentScratchpad).omit({ id: true, createdAt: true });
+export type InsertAgentScratchpad = z.infer<typeof insertAgentScratchpadSchema>;
+export type AgentScratchpad = typeof agentScratchpad.$inferSelect;
+
+// Recommendations — A09 output; prioritised actions for analyst review.
+// `priority` is an integer rank (1 = highest); change to text if categorical.
+export const recommendations = pgTable("recommendations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  runId: varchar("run_id"),
+  priority: integer("priority"),
+  statement: text("statement").notNull(),
+  evidence: jsonb("evidence"),
+  effort: text("effort"),
+  impact: text("impact"),
+  ownerRole: text("owner_role"),
+  status: text("status").notNull().default("open"),
+  analystEdit: text("analyst_edit"),
+});
+
+export const insertRecommendationSchema = createInsertSchema(recommendations).omit({ id: true });
+export type InsertRecommendation = z.infer<typeof insertRecommendationSchema>;
+export type Recommendation = typeof recommendations.$inferSelect;
+
+// Anomalies — A08 output; detected outliers for UI display.
+// severity: 'P0' | 'P1' | 'P2'; status: 'open' | 'acknowledged' | 'resolved'.
+export const anomalies = pgTable("anomalies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  metric: text("metric").notNull(),
+  severity: text("severity").notNull(),
+  detectedAt: timestamp("detected_at").defaultNow(),
+  value: doublePrecision("value"),
+  baseline: doublePrecision("baseline"),
+  delta: doublePrecision("delta"),
+  rootCause: text("root_cause"),
+  status: text("status").notNull().default("open"),
+});
+
+export const insertAnomalySchema = createInsertSchema(anomalies).omit({ id: true });
+export type InsertAnomaly = z.infer<typeof insertAnomalySchema>;
+export type Anomaly = typeof anomalies.$inferSelect;
+
+// Report drafts — A10 output; weekly drafts pending analyst approval.
+export const reportDrafts = pgTable("report_drafts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  reportType: text("report_type"),
+  weekNumber: integer("week_number"),
+  content: jsonb("content"),
+  pdfUrl: text("pdf_url"),
+  status: text("status").notNull().default("draft"),
+  analystNotes: text("analyst_notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  approvedAt: timestamp("approved_at"),
+});
+
+export const insertReportDraftSchema = createInsertSchema(reportDrafts).omit({ id: true, createdAt: true });
+export type InsertReportDraft = z.infer<typeof insertReportDraftSchema>;
+export type ReportDraft = typeof reportDrafts.$inferSelect;
+
+// Email drafts — A12 output; cover email drafts for analyst review before send.
+// status: 'draft' | 'analyst_approved' | 'sent' | 'discarded'
+export const emailDrafts = pgTable("email_drafts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  reportDraftId: varchar("report_draft_id"),
+  subject: text("subject").notNull(),
+  body: text("body").notNull(),
+  status: text("status").notNull().default("draft"),
+  analystEdit: text("analyst_edit"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertEmailDraftSchema = createInsertSchema(emailDrafts).omit({ id: true, createdAt: true });
+export type InsertEmailDraft = z.infer<typeof insertEmailDraftSchema>;
+export type EmailDraft = typeof emailDrafts.$inferSelect;
