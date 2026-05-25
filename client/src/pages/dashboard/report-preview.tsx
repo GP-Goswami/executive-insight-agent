@@ -27,6 +27,8 @@ import {
 import { subDays } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import { computeDataHealthScore, type DataHealthInput, type DataHealthScore } from "@/lib/compute-data-health";
+import { AnomalySection, type Anomaly } from "@/components/agents/AnomalySection";
+import { RecommendationList, type Recommendation } from "@/components/agents/RecommendationList";
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -701,6 +703,35 @@ export default function ReportPreviewPage() {
 
   const ga4TopPages = ga4TopPagesResponse?.data || [];
 
+  // ── Anomalies (A08) — open anomalies for this property, shown above verdict ─
+  const { data: anomaliesResponse } = useQuery<Anomaly[]>({
+    queryKey: ["/api/agents/anomalies", ga4PropertyId],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (ga4PropertyId) params.set("tenantId", ga4PropertyId);
+      params.set("status", "open");
+      const res = await fetch(`/api/agents/anomalies?${params}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!ga4PropertyId,
+  });
+  const anomalies = anomaliesResponse ?? [];
+
+  // ── Recommendations (A09) — latest synthesis run for this property ──────────
+  const { data: recommendationsResponse } = useQuery<Recommendation[]>({
+    queryKey: ["/api/agents/recommendations", ga4PropertyId],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (ga4PropertyId) params.set("tenantId", ga4PropertyId);
+      const res = await fetch(`/api/agents/recommendations?${params}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!ga4PropertyId,
+  });
+  const agentRecommendations = recommendationsResponse ?? [];
+
   // Fetch competitive SOV — uses SEMrush when configured, fallback estimates otherwise
   useEffect(() => {
     setCompetitiveSov(null);
@@ -796,7 +827,7 @@ export default function ReportPreviewPage() {
         },
       };
 
-      const body = { domain, start: startStr, end: endStr, snapshot };
+      const body = { domain, start: startStr, end: endStr, snapshot, tenantId: ga4PropertyId };
       const res = await fetch("/api/generate-pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1014,6 +1045,9 @@ export default function ReportPreviewPage() {
           Updating report data...
         </div>
       )}
+
+      {/* ══════════════ ANOMALIES (A08) ══════════════ */}
+      <AnomalySection anomalies={anomalies} tenantId={ga4PropertyId} />
 
       {/* ══════════════ DATA HEALTH + VERDICT ══════════════ */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1812,6 +1846,9 @@ export default function ReportPreviewPage() {
           </CardContent>
         </Card>
       </section>
+
+      {/* ══════════════ A09 RECOMMENDATIONS ══════════════ */}
+      <RecommendationList recommendations={agentRecommendations} />
     </div>
   );
 }

@@ -46,3 +46,5 @@ DASHBOARD_DATA_GUIDE.md
 # Uncomment only if you don't want to track these:
 # package-lock.json
 # package.json
+CLAUDE.md
+specs/
