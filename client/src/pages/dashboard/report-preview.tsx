@@ -29,6 +29,8 @@ import type { DateRange } from "react-day-picker";
 import { computeDataHealthScore, type DataHealthInput, type DataHealthScore } from "@/lib/compute-data-health";
 import { AnomalySection, type Anomaly } from "@/components/agents/AnomalySection";
 import { RecommendationList, type Recommendation } from "@/components/agents/RecommendationList";
+import { ContentPerformanceSection } from "@/components/agents/ContentPerformanceSection";
+import { KeywordIntelligenceSection } from "@/components/agents/KeywordIntelligenceSection";
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -1048,6 +1050,12 @@ export default function ReportPreviewPage() {
 
       {/* ══════════════ ANOMALIES (A08) ══════════════ */}
       <AnomalySection anomalies={anomalies} tenantId={ga4PropertyId} />
+
+      {/* ══════════════ CONTENT PERFORMANCE (A04) ══════════════ */}
+      <ContentPerformanceSection tenantId={ga4PropertyId} />
+
+      {/* ══════════════ KEYWORD INTELLIGENCE (A02) ══════════════ */}
+      <KeywordIntelligenceSection tenantId={ga4PropertyId} />
 
       {/* ══════════════ DATA HEALTH + VERDICT ══════════════ */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

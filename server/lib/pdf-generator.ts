@@ -1416,6 +1416,17 @@ export interface AISectionReportDraft {
       count?: number;
       items?: Array<{ priority?: number | null; statement?: string; effort?: string | null; impact?: string | null; ownerRole?: string | null }>;
     };
+    // A04 — content highlights (wired in from agent_runs by A10).
+    contentHighlights?: {
+      topPages?: Array<{ page?: string; sessions?: number; engagementRate?: number }>;
+      decayingPages?: Array<{ page?: string; dropPct?: number; sessions?: number; prevSessions?: number }>;
+    };
+    // A02 — keyword movement (wired in from agent_runs by A10).
+    keywordMovement?: {
+      topMovers?: Array<{ query?: string; prevPosition?: number; position?: number; positionDelta?: number; direction?: string }>;
+      ctrOpportunities?: Array<{ query?: string; impressions?: number; ctr?: number; expectedCtr?: number; potentialExtraClicks?: number }>;
+      cannibalization?: Array<{ query?: string; pageCount?: number; totalImpressions?: number; pages?: Array<{ page?: string; impressions?: number }> }>;
+    };
     appendix?: {
       weekNumber?: number;
       generatedAt?: string;
@@ -1484,6 +1495,68 @@ export function addAIGeneratedSections(
           .text(cleanText(item.summary ?? item.rootCause ?? ""), M + 12, doc.y, { width: W - 12, lineGap: 3 });
       }
       doc.moveDown(0.4);
+    }
+  }
+
+  // Content Highlights (A04) — added after Anomalies.
+  const ch = reportDraft.content.contentHighlights;
+  if (ch && ((ch.topPages?.length ?? 0) > 0 || (ch.decayingPages?.length ?? 0) > 0)) {
+    addSectionHeading("Content Highlights");
+
+    doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(11).text(cleanText("Top Performing Pages"), M, doc.y, { width: W });
+    doc.moveDown(0.3);
+    for (const p of (ch.topPages ?? []).slice(0, 3)) {
+      doc.fillColor("#334155").font("Helvetica").fontSize(9).text(cleanText(p.page ?? ""), M, doc.y, { width: W });
+      const eng = p.engagementRate != null && p.engagementRate >= 0 ? `${p.engagementRate}%` : "—";
+      doc.fillColor("#64748b").fontSize(8).text(cleanText(`Sessions: ${p.sessions ?? 0}  |  Engagement: ${eng}`), M + 12, doc.y, { width: W - 12 });
+      doc.moveDown(0.4);
+    }
+
+    doc.moveDown(0.5);
+    doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(11).text(cleanText("Decaying Pages (needs attention)"), M, doc.y, { width: W });
+    doc.moveDown(0.3);
+    for (const p of (ch.decayingPages ?? []).slice(0, 3)) {
+      doc.fillColor("#dc2626").font("Helvetica-Bold").fontSize(9).text(cleanText(`-${p.dropPct ?? 0}%  ${p.page ?? ""}`), M, doc.y, { width: W });
+      doc.fillColor("#64748b").font("Helvetica").fontSize(8).text(cleanText(`Sessions: ${p.prevSessions ?? 0} -> ${p.sessions ?? 0}`), M + 12, doc.y, { width: W - 12 });
+      doc.moveDown(0.4);
+    }
+  }
+
+  // Keyword Movement (A02) — added after Content Highlights.
+  const km = reportDraft.content.keywordMovement;
+  if (km && ((km.topMovers?.length ?? 0) > 0 || (km.ctrOpportunities?.length ?? 0) > 0 || (km.cannibalization?.length ?? 0) > 0)) {
+    addSectionHeading("Keyword Movement");
+
+    doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(11).text(cleanText("Top Ranking Movers"), M, doc.y, { width: W });
+    doc.moveDown(0.3);
+    for (const mv of (km.topMovers ?? []).slice(0, 5)) {
+      const delta = mv.positionDelta ?? 0;
+      const color = delta > 0 ? "#16a34a" : delta < 0 ? "#dc2626" : "#64748b";
+      const dir = delta > 0 ? "UP" : delta < 0 ? "DOWN" : "FLAT";
+      doc.fillColor("#334155").font("Helvetica").fontSize(9).text(cleanText(mv.query ?? ""), M, doc.y, { width: W });
+      doc.fillColor(color).fontSize(8).text(cleanText(`${mv.prevPosition ?? "-"} -> ${mv.position ?? "-"}  (${dir} ${Math.abs(delta)})`), M + 12, doc.y, { width: W - 12 });
+      doc.moveDown(0.35);
+    }
+
+    doc.moveDown(0.5);
+    doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(11).text(cleanText("CTR Opportunities"), M, doc.y, { width: W });
+    doc.moveDown(0.3);
+    for (const c of (km.ctrOpportunities ?? []).slice(0, 3)) {
+      doc.fillColor("#334155").font("Helvetica").fontSize(9).text(cleanText(c.query ?? ""), M, doc.y, { width: W });
+      doc.fillColor("#64748b").fontSize(8).text(cleanText(`Impr: ${c.impressions ?? 0}  |  CTR: ${c.ctr ?? 0}% vs expected ${c.expectedCtr ?? 0}%  |  +${c.potentialExtraClicks ?? 0} clicks`), M + 12, doc.y, { width: W - 12 });
+      doc.moveDown(0.35);
+    }
+
+    if ((km.cannibalization?.length ?? 0) > 0) {
+      doc.moveDown(0.5);
+      doc.fillColor("#dc2626").font("Helvetica-Bold").fontSize(11).text(cleanText("Cannibalization Signals"), M, doc.y, { width: W });
+      doc.moveDown(0.3);
+      for (const c of km.cannibalization ?? []) {
+        doc.fillColor("#dc2626").font("Helvetica-Bold").fontSize(9).text(cleanText(c.query ?? ""), M, doc.y, { width: W });
+        const pages = (c.pages ?? []).map((p) => `${p.page ?? ""} (${p.impressions ?? 0})`).join("  vs  ");
+        doc.fillColor("#64748b").font("Helvetica").fontSize(8).text(cleanText(`${c.pageCount ?? 0} pages  |  ${pages}`), M + 12, doc.y, { width: W - 12 });
+        doc.moveDown(0.35);
+      }
     }
   }
 

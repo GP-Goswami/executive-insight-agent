@@ -64,6 +64,10 @@ import qaRouter from "./routes/agents/qa";
 import communicationRouter from "./routes/agents/communication";
 import schedulerRouter from "./routes/agents/scheduler";
 import runsRouter from "./routes/agents/runs";
+import contentRouter from "./routes/agents/content";
+import keywordsRouter from "./routes/agents/keywords";
+import weeklyReportRouter from "./reports/weekly/routes";
+import monthlyReportRouter from "./reports/monthly/routes";
 
 const ga4PropertyCache = new Map<string, string>();
 
@@ -98,6 +102,12 @@ export async function registerRoutes(
   app.use("/api/agents", communicationRouter);
   app.use("/api/agents", schedulerRouter);
   app.use("/api/agents", runsRouter);
+  app.use("/api/agents", contentRouter);
+  app.use("/api/agents", keywordsRouter);
+
+  // Weekly / Monthly report builders (additive — server/reports/*)
+  app.use("/api/reports/weekly", weeklyReportRouter);
+  app.use("/api/reports/monthly", monthlyReportRouter);
 
   // ─── SYNC STATUS ENDPOINT ───────────────────────────────────────────────────
   // GET /api/sync/status — returns last-fetched timestamps from cache tables

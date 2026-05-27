@@ -28,6 +28,8 @@ import ExportsPage from "@/pages/dashboard/exports";
 import ReportPreviewPage from "@/pages/dashboard/report-preview";
 import ReviewQueuePage from "@/pages/dashboard/review-queue";
 import AgentConsolePage from "@/pages/dashboard/agent-console";
+import WeeklyReportPage from "@/pages/dashboard/weekly/weekly-report";
+import MonthlyReportPage from "@/pages/dashboard/monthly/monthly-report";
 import WorkspaceHomePage from "@/pages/dashboard/workspace-home";
 import SettingsPage from "@/pages/dashboard/settings";
 import NotFound from "@/pages/not-found";
@@ -88,6 +90,8 @@ function DashboardRouter() {
         <Route path="/dashboard/rankings" component={RankingsPage} />
         <Route path="/dashboard/backlinks" component={BacklinksPage} />
         <Route path="/dashboard/report-preview" component={ReportPreviewPage} />
+        <Route path="/dashboard/weekly" component={WeeklyReportPage} />
+        <Route path="/dashboard/monthly" component={MonthlyReportPage} />
         <Route path="/dashboard/review-queue" component={ReviewQueuePage} />
         <Route path="/dashboard/agent-console" component={AgentConsolePage} />
         <Route path="/dashboard/exports" component={ExportsPage} />

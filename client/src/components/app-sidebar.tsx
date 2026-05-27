@@ -27,6 +27,8 @@ import {
   ClipboardList,
   Terminal,
   Home,
+  CalendarDays,
+  CalendarRange,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -82,6 +84,16 @@ const secondaryItems = [
     title: "Report Preview",
     url: "/dashboard/report-preview",
     icon: FileText,
+  },
+  {
+    title: "Weekly Report",
+    url: "/dashboard/weekly",
+    icon: CalendarDays,
+  },
+  {
+    title: "Monthly Report",
+    url: "/dashboard/monthly",
+    icon: CalendarRange,
   },
   {
     title: "Review Queue",

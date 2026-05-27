@@ -7,7 +7,7 @@
 //   A10_COMPOSITION_MODEL (default gpt-4.1; strategy tier)
 
 import OpenAI from "openai";
-import { eq, desc, sql } from "drizzle-orm";
+import { and, eq, desc, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   ga4DailyMetrics,
@@ -15,6 +15,7 @@ import {
   recommendations,
   reportDrafts,
   properties,
+  agentRuns,
   type InsertReportDraft,
 } from "@shared/schema";
 import { BaseAgent, type AgentResult } from "./base-agent";
@@ -54,6 +55,13 @@ export class ReportCompositionAgent extends BaseAgent {
     const anomalies = (a08?.anomalies ?? []) as Array<{ metric: string; severity: string; summary?: string; rootCause?: string }>;
     const a09Recs = (a09?.recommendations ?? []) as Array<{ priority: number; statement: string; effort: string; impact: string }>;
 
+    // ── Read latest A04 (content performance) + A02 (keyword intelligence) ───────
+    // These deterministic agents store full findings in agent_runs.output.
+    const a04Run = await this.loadLatestAgentOutput("A04", tenantId);
+    const a02Run = await this.loadLatestAgentOutput("A02", tenantId);
+    const contentHighlights = buildContentHighlights(a04Run?.output);
+    const keywordMovement = buildKeywordMovement(a02Run?.output);
+
     // Read approved recommendations from the DB (most recent A09 run)
     const approvedRecs = await this.loadApprovedRecommendations(tenantId);
 
@@ -85,6 +93,8 @@ export class ReportCompositionAgent extends BaseAgent {
     const sourceRunIds = [
       ...a08Entries.map((e) => `A08:${e.runId ?? "unknown"}`),
       ...a09Entries.map((e) => `A09:${e.runId ?? "unknown"}`),
+      ...(a04Run ? [`A04:${a04Run.runId}`] : []),
+      ...(a02Run ? [`A02:${a02Run.runId}`] : []),
     ];
 
     const reportContent = {
@@ -108,6 +118,10 @@ export class ReportCompositionAgent extends BaseAgent {
         items: anomalies.slice(0, 10),
         summary: a08?.summary ?? "",
       },
+      // A04 — content highlights (top 3 performing + top 3 decaying pages).
+      ...(contentHighlights ? { contentHighlights } : {}),
+      // A02 — keyword movement (top 5 movers + top 3 CTR opps + cannibalization).
+      ...(keywordMovement ? { keywordMovement } : {}),
       recommendationsSection: {
         count: approvedRecs.length,
         items: approvedRecs.slice(0, 5),
@@ -198,6 +212,21 @@ export class ReportCompositionAgent extends BaseAgent {
     };
   }
 
+  /** Latest completed run's output for an agent (A02/A04 store full findings here). */
+  private async loadLatestAgentOutput(
+    agentId: string,
+    tenantId: string,
+  ): Promise<{ output: Record<string, any>; runId: string } | null> {
+    const [row] = await db
+      .select({ output: agentRuns.output, runId: agentRuns.id })
+      .from(agentRuns)
+      .where(and(eq(agentRuns.agentId, agentId), eq(agentRuns.tenantId, tenantId), eq(agentRuns.status, "completed")))
+      .orderBy(desc(agentRuns.startedAt))
+      .limit(1);
+    if (!row?.output) return null;
+    return { output: row.output as Record<string, any>, runId: row.runId };
+  }
+
   private async loadApprovedRecommendations(tenantId: string) {
     return db
       .select()
@@ -267,6 +296,51 @@ export function runReportComposition(tenantId: string): Promise<AgentResult> {
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
+
+/** A04 → contentHighlights: top 3 performing pages + top 3 decaying pages. */
+function buildContentHighlights(a04: Record<string, any> | undefined) {
+  if (!a04) return undefined;
+  const topPages = (a04.topPerformingPages ?? []).slice(0, 3).map((p: any) => ({
+    page: String(p.page ?? ""),
+    sessions: Number(p.sessions ?? 0),
+    engagementRate: Number(p.engagementRate ?? -1),
+  }));
+  const decayingPages = (a04.decayingPages ?? []).slice(0, 3).map((p: any) => ({
+    page: String(p.page ?? ""),
+    dropPct: Number(p.dropPct ?? 0),
+    sessions: Number(p.sessions ?? 0),
+    prevSessions: Number(p.prevSessions ?? 0),
+  }));
+  if (topPages.length === 0 && decayingPages.length === 0) return undefined;
+  return { topPages, decayingPages };
+}
+
+/** A02 → keywordMovement: top 5 movers + top 3 CTR opps + cannibalization signals. */
+function buildKeywordMovement(a02: Record<string, any> | undefined) {
+  if (!a02) return undefined;
+  const topMovers = (a02.rankingDeltas ?? []).slice(0, 5).map((m: any) => ({
+    query: String(m.query ?? ""),
+    prevPosition: Number(m.prevPosition ?? 0),
+    position: Number(m.position ?? 0),
+    positionDelta: Number(m.positionDelta ?? 0),
+    direction: String(m.direction ?? ""),
+  }));
+  const ctrOpportunities = (a02.ctrOpportunities ?? []).slice(0, 3).map((c: any) => ({
+    query: String(c.query ?? ""),
+    impressions: Number(c.impressions ?? 0),
+    ctr: Number(c.ctr ?? 0),
+    expectedCtr: Number(c.expectedCtr ?? 0),
+    potentialExtraClicks: Number(c.potentialExtraClicks ?? 0),
+  }));
+  const cannibalization = (a02.cannibalizationSignals ?? []).map((c: any) => ({
+    query: String(c.query ?? ""),
+    pageCount: Number(c.pageCount ?? 0),
+    totalImpressions: Number(c.totalImpressions ?? 0),
+    pages: (c.pages ?? []).slice(0, 2).map((p: any) => ({ page: String(p.page ?? ""), impressions: Number(p.impressions ?? 0) })),
+  }));
+  if (topMovers.length === 0 && ctrOpportunities.length === 0 && cannibalization.length === 0) return undefined;
+  return { topMovers, ctrOpportunities, cannibalization };
+}
 
 function parseJsonArray(text: string): string[] {
   const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();

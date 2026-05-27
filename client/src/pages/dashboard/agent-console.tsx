@@ -79,11 +79,14 @@ const STATUS_BADGE: Record<string, { label: string; className: string; icon: Rea
 };
 
 const AGENT_LABELS: Record<string, string> = {
+  A02: "Keyword Intelligence",
+  A04: "Content Performance",
   A08: "Anomaly Detection",
   A09: "Recommendation Synthesis",
   A10: "Report Composition",
   A11: "Quality Review",
   A12: "Client Communication",
+  A14: "Monthly Report",
 };
 
 function fmtDuration(ms: number | null): string {
