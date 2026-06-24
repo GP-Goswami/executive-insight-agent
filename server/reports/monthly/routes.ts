@@ -43,7 +43,16 @@ router.post("/run", agentRunRateLimit, async (req, res) => {
   try {
     const tenantId = (req.body?.tenantId ?? req.query.tenantId) as string | undefined;
     if (!tenantId) return res.status(400).json({ error: "tenantId is required" });
-    const result = await runMonthlyReport(tenantId);
+
+    // Optional explicit window (yyyy-MM-dd) + GSC site URL override from the dashboard.
+    const { start, end, gscSiteUrl } = (req.body ?? {}) as { start?: string; end?: string; gscSiteUrl?: string };
+    const ymdRe = /^\d{4}-\d{2}-\d{2}$/;
+    const hasRange = !!(start && end && ymdRe.test(start) && ymdRe.test(end));
+    const opts = hasRange || gscSiteUrl
+      ? { ...(hasRange ? { start, end } : {}), ...(gscSiteUrl ? { gscSiteUrl } : {}) }
+      : undefined;
+
+    const result = await runMonthlyReport(tenantId, opts);
     if (result.status === "failed") return res.status(500).json({ error: result.error ?? "Monthly report failed" });
     return res.json(result.findings);
   } catch (err) {

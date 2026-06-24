@@ -45,7 +45,7 @@ import {
   aiPromptRuns,
   aiMentions,
 } from "@shared/schema";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { db } from "./db";
 import { fetchWithCache, clearProviderCache, getCacheStatus } from "./lib/cache";
 import { ga4Data, gscData, semrushData, backlinkData, googleOAuthTokens, users, reportDrafts } from "@shared/schema";
@@ -64,6 +64,7 @@ import qaRouter from "./routes/agents/qa";
 import communicationRouter from "./routes/agents/communication";
 import schedulerRouter from "./routes/agents/scheduler";
 import runsRouter from "./routes/agents/runs";
+import aeoRouter from "./routes/agents/aeo";
 import contentRouter from "./routes/agents/content";
 import keywordsRouter from "./routes/agents/keywords";
 import weeklyReportRouter from "./reports/weekly/routes";
@@ -102,6 +103,7 @@ export async function registerRoutes(
   app.use("/api/agents", communicationRouter);
   app.use("/api/agents", schedulerRouter);
   app.use("/api/agents", runsRouter);
+  app.use("/api/agents", aeoRouter);
   app.use("/api/agents", contentRouter);
   app.use("/api/agents", keywordsRouter);
 
@@ -2825,7 +2827,7 @@ export async function registerRoutes(
         const [latestDraft] = await db
           .select({ content: reportDrafts.content })
           .from(reportDrafts)
-          .where(eq(reportDrafts.tenantId, String(tenantId)))
+          .where(and(eq(reportDrafts.tenantId, String(tenantId)), eq(reportDrafts.pipeline, "A10")))
           .orderBy(desc(reportDrafts.createdAt))
           .limit(1);
         if (latestDraft?.content) {

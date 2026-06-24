@@ -43,6 +43,20 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+// High-frequency polling endpoints (UI auto-refresh). Logging these floods the
+// terminal, so successful GETs to them are skipped. Errors (status >= 400) are
+// always logged regardless.
+const QUIET_LOG_PATHS = [
+  "/api/agents/runs",
+  "/api/agents/anomalies",
+  "/api/agents/reports",
+  "/api/agents/recommendations",
+  "/api/agents/communication",
+  "/api/agents/aeo/results",
+  "/api/agents/scheduler/status",
+  "/api/notifications",
+];
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -56,14 +70,21 @@ app.use((req, res, next) => {
 
   res.on("finish", () => {
     const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
+    if (!path.startsWith("/api")) return;
 
-      log(logLine);
+    // Skip noisy successful polling reads; still log anything that errored.
+    const isQuiet =
+      req.method === "GET" &&
+      res.statusCode < 400 &&
+      QUIET_LOG_PATHS.some((p) => path.startsWith(p));
+    if (isQuiet) return;
+
+    let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+    if (capturedJsonResponse) {
+      logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
     }
+
+    log(logLine);
   });
 
   next();

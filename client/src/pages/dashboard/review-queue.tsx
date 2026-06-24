@@ -20,6 +20,7 @@ import {
   ShieldAlert,
   FlaskConical,
   Mail,
+  Trash2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -81,7 +82,7 @@ interface QAResponse {
   };
 }
 
-function ReportDraftCard({ draft }: { draft: ReportDraft }) {
+function ReportDraftCard({ draft, onDelete }: { draft: ReportDraft; onDelete: (id: string) => void }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState(false);
@@ -369,6 +370,21 @@ function ReportDraftCard({ draft }: { draft: ReportDraft }) {
             {qaRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
             {qaRunning ? "Running QA…" : "Request QA Review"}
           </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto text-red-400 hover:text-red-300 hover:bg-red-500/10"
+            disabled={pending}
+            onClick={() => {
+              if (window.confirm(`Delete the Week ${draft.weekNumber ?? "?"} report? It will no longer appear in the review queue.`)) {
+                onDelete(draft.id);
+                toast({ title: "Report deleted" });
+              }
+            }}
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete
+          </Button>
         </div>
 
         {/* Email drafts — rendered below action buttons, inside the card */}
@@ -397,10 +413,33 @@ function StatChip({ label, value, alert }: { label: string; value: string; alert
   );
 }
 
+const DELETED_REPORTS_LS_KEY = "review_queue_deleted_ids";
+
 export default function ReviewQueuePage() {
   const { toast } = useToast();
   const { ga4PropertyId } = useDomain();
   const [running, setRunning] = useState(false);
+
+  // Locally hidden (deleted) report ids — persisted so they stay gone across refreshes.
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(DELETED_REPORTS_LS_KEY);
+      return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  const handleDelete = (id: string) => {
+    setDeletedIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      try {
+        localStorage.setItem(DELETED_REPORTS_LS_KEY, JSON.stringify(Array.from(next)));
+      } catch {}
+      return next;
+    });
+  };
 
   const { data: drafts = [], isLoading } = useQuery<ReportDraft[]>({
     queryKey: ["/api/agents/reports", ga4PropertyId],
@@ -435,7 +474,8 @@ export default function ReviewQueuePage() {
     }
   }
 
-  const pendingCount = drafts.filter((d) => d.status === "pending_analyst").length;
+  const visibleDrafts = drafts.filter((d) => !deletedIds.has(d.id));
+  const pendingCount = visibleDrafts.filter((d) => d.status === "pending_analyst").length;
 
   return (
     <div className="min-h-screen bg-background p-6">
@@ -475,7 +515,7 @@ export default function ReviewQueuePage() {
           <div className="flex items-center justify-center py-20">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
-        ) : drafts.length === 0 ? (
+        ) : visibleDrafts.length === 0 ? (
           <Card className="border-dashed border-white/10 bg-card/30">
             <CardContent className="flex flex-col items-center justify-center py-16 text-center">
               <AlertCircle className="mb-3 h-10 w-10 text-muted-foreground/40" />
@@ -488,12 +528,12 @@ export default function ReviewQueuePage() {
         ) : (
           <>
             <div className="space-y-4">
-              {drafts.map((draft) => (
-                <ReportDraftCard key={draft.id} draft={draft} />
+              {visibleDrafts.map((draft) => (
+                <ReportDraftCard key={draft.id} draft={draft} onDelete={handleDelete} />
               ))}
             </div>
             <p className="text-center text-xs text-muted-foreground/40">
-              {drafts.length} report{drafts.length !== 1 ? "s" : ""} in queue
+              {visibleDrafts.length} report{visibleDrafts.length !== 1 ? "s" : ""} in queue
             </p>
           </>
         )}

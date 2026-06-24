@@ -10,12 +10,14 @@
 //   - Tenant list is fetched fresh on every job run (new tenants picked up automatically)
 
 import cron from "node-cron";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import { db } from "../db";
 import { properties, clients, agentRuns, reportDrafts } from "@shared/schema";
 import { runAnomalyDetection } from "../agents/anomaly-detection";
 import { runRecommendationSynthesis } from "../agents/recommendation-synthesis";
 import { runReportComposition } from "../agents/report-composition";
+import { runWeeklyReport } from "../reports/weekly/weekly-builder";
+import { runMonthlyReport } from "../reports/monthly/monthly-builder";
 
 // ── State (in-memory; reset on restart) ──────────────────────────────────────
 
@@ -157,6 +159,69 @@ export async function runWeeklyJob(tenantId?: string): Promise<void> {
   );
 }
 
+// ── Job: Weekly Strategic Report (last complete week) ─────────────────────────
+// Fired Monday morning → generates the just-finished week's report per tenant.
+export async function runWeeklyReportJob(tenantId?: string): Promise<void> {
+  const tenants = tenantId ? [tenantId] : await getActiveTenantIds();
+  console.log(`[scheduler:weeklyReport] starting — ${tenants.length} tenant(s)`);
+  for (const tid of tenants) {
+    try {
+      const r = await runWeeklyReport(tid);
+      if (r.status === "failed") console.error(`[scheduler:weeklyReport] tenant ${tid} failed: ${r.error}`);
+      else console.log(`[scheduler:weeklyReport] tenant ${tid} OK`);
+    } catch (err) {
+      console.error(`[scheduler:weeklyReport] tenant ${tid} error:`, err instanceof Error ? err.message : err);
+    }
+  }
+  console.log("[scheduler:weeklyReport] done");
+}
+
+// ── Job: Monthly Strategic Report (last complete calendar month) ──────────────
+// Fired on the 1st of each month → generates the previous month's report.
+export async function runMonthlyReportJob(tenantId?: string): Promise<void> {
+  const tenants = tenantId ? [tenantId] : await getActiveTenantIds();
+  console.log(`[scheduler:monthlyReport] starting — ${tenants.length} tenant(s)`);
+  for (const tid of tenants) {
+    try {
+      const r = await runMonthlyReport(tid);
+      if (r.status === "failed") console.error(`[scheduler:monthlyReport] tenant ${tid} failed: ${r.error}`);
+      else console.log(`[scheduler:monthlyReport] tenant ${tid} OK`);
+    } catch (err) {
+      console.error(`[scheduler:monthlyReport] tenant ${tid} error:`, err instanceof Error ? err.message : err);
+    }
+  }
+  console.log("[scheduler:monthlyReport] done");
+}
+
+// ── Stale-run sweeper ─────────────────────────────────────────────────────────
+// A run row stuck in "running" past this many minutes is almost certainly orphaned
+// (server restarted mid-run, or the agent process was interrupted). Mark it failed
+// so it stops showing as "running" forever in Live Runs / agent pages.
+const STALE_RUN_MINUTES = 15;
+
+export async function sweepStaleRuns(): Promise<number> {
+  const cutoff = new Date(Date.now() - STALE_RUN_MINUTES * 60_000);
+  try {
+    const updated = await db
+      .update(agentRuns)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        error: `Stale run — exceeded ${STALE_RUN_MINUTES} min without completing (server restart or interrupted execution).`,
+      })
+      .where(and(eq(agentRuns.status, "running"), lt(agentRuns.startedAt, cutoff)))
+      .returning({ id: agentRuns.id });
+
+    if (updated.length > 0) {
+      console.log(`[scheduler:sweep] marked ${updated.length} stale run(s) as failed`);
+    }
+    return updated.length;
+  } catch (err) {
+    console.error("[scheduler:sweep] failed to sweep stale runs:", err);
+    return 0;
+  }
+}
+
 // ── Next-run helpers ──────────────────────────────────────────────────────────
 
 function nextDailyRun(): Date {
@@ -182,6 +247,17 @@ export function initScheduler(): void {
   state.daily.nextRun = nextDailyRun();
   state.weekly.nextRun = nextWeeklyRun();
 
+  // Clear any runs orphaned by the previous process (e.g. server restarted
+  // mid-run), then keep sweeping every 10 minutes.
+  sweepStaleRuns().catch((err) => console.error("[scheduler:sweep] startup sweep error:", err));
+  cron.schedule("*/10 * * * *", async () => {
+    try {
+      await sweepStaleRuns();
+    } catch (err) {
+      console.error("[scheduler:sweep] cron error:", err);
+    }
+  });
+
   // Daily 3 AM — A08
   cron.schedule("0 3 * * *", async () => {
     state.daily.nextRun = nextDailyRun();
@@ -204,7 +280,25 @@ export function initScheduler(): void {
     }
   });
 
-  console.log("[scheduler] Scheduler initialized — daily 3AM, weekly Mon 4AM");
+  // Weekly Strategic Report — Monday 6 AM (the week that just finished)
+  cron.schedule("0 6 * * 1", async () => {
+    try {
+      await runWeeklyReportJob();
+    } catch (err) {
+      console.error("[scheduler:weeklyReport] unhandled error:", err);
+    }
+  });
+
+  // Monthly Strategic Report — 1st of each month 5 AM (the month that just finished)
+  cron.schedule("0 5 1 * *", async () => {
+    try {
+      await runMonthlyReportJob();
+    } catch (err) {
+      console.error("[scheduler:monthlyReport] unhandled error:", err);
+    }
+  });
+
+  console.log("[scheduler] Scheduler initialized — daily 3AM, weekly Mon 4AM, weekly-report Mon 6AM, monthly-report 1st 5AM");
 }
 
 // ── Status export (for the status route) ─────────────────────────────────────

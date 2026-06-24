@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { DataTable, Column } from "@/components/dashboard/data-table";
@@ -10,17 +10,18 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { 
-  MessageSquare, 
-  TrendingUp, 
-  TrendingDown, 
-  Target, 
-  Percent, 
+import {
+  MessageSquare,
+  TrendingUp,
+  TrendingDown,
+  Target,
+  Percent,
   Play,
   Plus,
   AlertCircle,
@@ -31,8 +32,14 @@ import {
   Building2,
   Loader2,
   Trash2,
-  Edit2
+  Edit2,
+  Bot,
+  Zap,
+  Eye,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
+import { useDomain } from "@/hooks/use-domain";
 import type { DateRange } from "react-day-picker";
 import { subDays, format } from "date-fns";
 
@@ -88,7 +95,110 @@ interface Stats {
   promptsMissing: Prompt[];
 }
 
+// ── AEO types ──────────────────────────────────────────────────────────────────
+
+interface AeoEngineResult {
+  citationShare: number;
+  mentionsFound: number;
+}
+
+interface AeoAggregates {
+  citationShare: number;
+  avgPosition: number;
+  totalRuns: number;
+  mentionsFound: number;
+}
+
+interface AeoRunRow {
+  id: string;
+  query: string;
+  engine: string;
+  cited: number;
+  position: number | null;
+  context: string | null;
+  excerpt: string | null;
+  brandEntity: string;
+  createdAt: string | null;
+}
+
+interface AeoResults {
+  aggregates: AeoAggregates;
+  byEngine: Record<string, AeoEngineResult>;
+  recentResults: AeoRunRow[];
+}
+
+interface AeoQueryResult {
+  query: string;
+  chatgpt: { cited: boolean; position: number | null; excerpt: string | null } | null;
+  claude:  { cited: boolean; position: number | null; excerpt: string | null } | null;
+  gemini:  { cited: boolean; position: number | null; excerpt: string | null } | null;
+}
+
+// v2 key forces fresh defaults when user upgrades (old localStorage key is abandoned)
+const DEFAULT_AEO_QUERIES = [
+  // Type A — Direct brand queries (high citation probability)
+  "What is TrueFirms?",
+  "Tell me about truefirms.co",
+  "Is TrueFirms a good platform?",
+  // Type B — Category queries (competitive landscape)
+  "best B2B service marketplace platforms",
+  "alternatives to Clutch.co",
+  "top IT staffing platforms 2024",
+  // Type C — Use-case queries
+  "where can I find verified software companies",
+  "how to hire outsourced development teams",
+];
+const DEFAULT_AEO_BRANDS = ["TrueFirms"];
+
+const LS_QUERIES_KEY = "aeo_queries_v2";
+const LS_BRANDS_KEY  = "aeo_brands_v1";
+
+function useLocalStorageList(key: string, defaults: string[]): [string[], (v: string[]) => void] {
+  const [items, setItems] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) return JSON.parse(raw) as string[];
+    } catch {}
+    return defaults;
+  });
+  const save = (v: string[]) => {
+    setItems(v);
+    try { localStorage.setItem(key, JSON.stringify(v)); } catch {}
+  };
+  return [items, save];
+}
+
+// ── Engine status card ─────────────────────────────────────────────────────────
+
+function EngineCard({ name, icon, data }: {
+  name: string;
+  icon: React.ReactNode;
+  data?: AeoEngineResult;
+}) {
+  const share = data?.citationShare ?? null;
+  const color = share === null ? "text-muted-foreground" : share >= 60 ? "text-emerald-400" : share >= 30 ? "text-amber-400" : "text-red-400";
+  return (
+    <Card className="bg-card border-white/10 flex-1">
+      <CardContent className="pt-4 pb-4">
+        <div className="flex items-center gap-2 mb-2">
+          {icon}
+          <span className="text-sm font-medium text-foreground">{name}</span>
+        </div>
+        {data ? (
+          <>
+            <p className={`text-2xl font-bold ${color}`}>{share}%</p>
+            <p className="text-xs text-muted-foreground">cited · {data.mentionsFound} mention{data.mentionsFound !== 1 ? "s" : ""}</p>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">No data yet</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function AiMentionsPage() {
+  const { ga4PropertyId } = useDomain();
   const { toast } = useToast();
   const [selectedPromptSetId, setSelectedPromptSetId] = useState<string | null>(null);
   const [selectedBrandEntityId, setSelectedBrandEntityId] = useState<string | null>(null);
@@ -108,6 +218,67 @@ export default function AiMentionsPage() {
   const [newBrandSynonyms, setNewBrandSynonyms] = useState("");
   const [newBrandCompetitors, setNewBrandCompetitors] = useState("");
 
+  // ── AEO state ────────────────────────────────────────────────────────────────
+  const [aeoQueries, setAeoQueries] = useLocalStorageList(LS_QUERIES_KEY, DEFAULT_AEO_QUERIES);
+  const [aeoBrands, setAeoBrands]   = useLocalStorageList(LS_BRANDS_KEY, DEFAULT_AEO_BRANDS);
+  const [aeoRunning, setAeoRunning] = useState(false);
+  const [aeoRunResults, setAeoRunResults] = useState<AeoQueryResult[] | null>(null);
+  const [aeoEngineStatus, setAeoEngineStatus]   = useState<Record<string, boolean>>({});
+  const [aeoEngineErrors, setAeoEngineErrors]   = useState<Record<string, string>>({});
+  const [aeoResponseTexts, setAeoResponseTexts] = useState<Record<string, Record<string, string>>>({});
+  const [debugMode, setDebugMode]               = useState(false);
+  const [expandedRows, setExpandedRows]         = useState<Set<number>>(new Set());
+  const [newAeoQuery, setNewAeoQuery] = useState("");
+  const [newAeoBrand, setNewAeoBrand] = useState("");
+  const [selectedAeoBrand, setSelectedAeoBrand] = useState<string>(() => DEFAULT_AEO_BRANDS[0]);
+
+  const { data: aeoData, refetch: refetchAeo } = useQuery<AeoResults>({
+    queryKey: ["/api/agents/aeo/results", ga4PropertyId, selectedAeoBrand],
+    queryFn: async () => {
+      if (!ga4PropertyId) return { aggregates: { citationShare: 0, avgPosition: 0, totalRuns: 0, mentionsFound: 0 }, byEngine: {}, recentResults: [] };
+      const res = await fetch(`/api/agents/aeo/results?tenantId=${encodeURIComponent(ga4PropertyId)}&brandEntity=${encodeURIComponent(selectedAeoBrand)}`);
+      if (!res.ok) return { aggregates: { citationShare: 0, avgPosition: 0, totalRuns: 0, mentionsFound: 0 }, byEngine: {}, recentResults: [] };
+      return res.json();
+    },
+    enabled: !!ga4PropertyId,
+    refetchInterval: 30_000,
+  });
+
+  const handleAeoRun = async () => {
+    if (!ga4PropertyId || aeoRunning || aeoQueries.length === 0) return;
+    setAeoRunning(true);
+    setAeoRunResults(null);
+    try {
+      const res = await fetch("/api/agents/aeo/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantId: ga4PropertyId, queries: aeoQueries, brandEntity: selectedAeoBrand }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Run failed");
+      setAeoRunResults((data.queryResults as AeoQueryResult[]) ?? null);
+      if (data.engineStatus)   setAeoEngineStatus(data.engineStatus as Record<string, boolean>);
+      if (data.engineErrors)   setAeoEngineErrors(data.engineErrors as Record<string, string>);
+      if (data.responseTexts)  setAeoResponseTexts(data.responseTexts as Record<string, Record<string, string>>);
+      setExpandedRows(new Set());
+      const errors = data.engineErrors as Record<string, string> | undefined;
+      const failedEngines = errors ? Object.keys(errors) : [];
+      toast({
+        title: "AEO scan complete",
+        description: failedEngines.length
+          ? `${data.mentionsFound ?? 0} citations · ${failedEngines.join(", ")} failed: ${Object.values(errors!)[0].slice(0, 80)}`
+          : `${data.mentionsFound ?? 0} citations found across ${data.totalRuns ?? 0} engine responses`,
+        variant: failedEngines.length ? "destructive" : "default",
+      });
+      refetchAeo();
+    } catch (err: unknown) {
+      toast({ title: "AEO run failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setAeoRunning(false);
+    }
+  };
+
+  // ── Existing prompt-set state ─────────────────────────────────────────────────
   const { data: promptSets = [], isLoading: loadingSets } = useQuery<PromptSet[]>({
     queryKey: ["/api/ai-mentions/prompt-sets"],
   });
@@ -396,12 +567,294 @@ export default function AiMentionsPage() {
         </AlertDescription>
       </Alert>
 
-      <Tabs defaultValue="dashboard" className="space-y-6">
+      <Tabs defaultValue="aeo" className="space-y-6">
         <TabsList>
-          <TabsTrigger value="dashboard" data-testid="tab-dashboard">Dashboard</TabsTrigger>
+          <TabsTrigger value="aeo" data-testid="tab-aeo">AEO Visibility</TabsTrigger>
+          <TabsTrigger value="dashboard" data-testid="tab-dashboard">Prompt Monitor</TabsTrigger>
           <TabsTrigger value="prompts" data-testid="tab-prompts">Prompt Sets</TabsTrigger>
           <TabsTrigger value="brands" data-testid="tab-brands">Brand Entities</TabsTrigger>
         </TabsList>
+
+        {/* ── AEO Visibility Tab ──────────────────────────────────────────── */}
+        <TabsContent value="aeo" className="space-y-6">
+
+          {/* Controls row */}
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex-1 min-w-[180px]">
+              <Label className="text-sm text-muted-foreground mb-2 block">Brand</Label>
+              <Select value={selectedAeoBrand} onValueChange={setSelectedAeoBrand}>
+                <SelectTrigger data-testid="select-aeo-brand">
+                  <SelectValue placeholder="Select brand..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {/* DB brand entities first (unique names), then localStorage-only ones */}
+                  {Array.from(new Set([
+                    ...brandEntities.map((e) => e.brandName),
+                    ...aeoBrands,
+                  ])).map((b) => (
+                    <SelectItem key={b} value={b}>{b}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex-1 min-w-[180px]">
+              <Label className="text-sm text-muted-foreground mb-2 block">
+                Queries ({aeoQueries.length})
+              </Label>
+              <p className="text-xs text-muted-foreground truncate">
+                {aeoQueries.slice(0, 2).join(" · ")}{aeoQueries.length > 2 ? ` +${aeoQueries.length - 2} more` : ""}
+              </p>
+            </div>
+            <Button
+              onClick={handleAeoRun}
+              disabled={aeoRunning || !ga4PropertyId || aeoQueries.length === 0}
+              className="gap-2"
+              data-testid="button-aeo-run"
+            >
+              {aeoRunning ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Scanning…
+                </>
+              ) : (
+                <>
+                  <Zap className="h-4 w-4" />
+                  Run Now
+                </>
+              )}
+            </Button>
+          </div>
+
+          {/* Per-engine running spinners */}
+          {aeoRunning && (
+            <div className="flex gap-3">
+              {(["ChatGPT", "Claude", "Gemini"] as const).map((eng) => (
+                <div key={eng} className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  {eng}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Metrics tiles */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <KpiCard title="Coverage" value={aeoData ? `${aeoData.aggregates.citationShare}%` : "—"} icon={Percent} accent="purple" />
+            <KpiCard title="Avg Position" value={aeoData?.aggregates.avgPosition ?? "—"} icon={Target} accent="cyan" />
+            <KpiCard title="Total Runs" value={aeoData?.aggregates.totalRuns ?? "—"} icon={MessageSquare} accent="amber" />
+            <KpiCard title="Mentions" value={aeoData?.aggregates.mentionsFound ?? "—"} icon={CheckCircle} accent="green" />
+          </div>
+
+          {/* Engine cards */}
+          <div className="flex flex-col sm:flex-row gap-3">
+            {[
+              { key: "chatgpt", name: "ChatGPT", icon: <Bot      className="h-4 w-4 text-green-400"  /> },
+              { key: "claude",  name: "Claude",  icon: <Sparkles className="h-4 w-4 text-orange-400" /> },
+            ].map(({ key, name, icon }) => {
+              const engineData = aeoData?.byEngine?.[key];
+              const keyMissing = key in aeoEngineStatus && !aeoEngineStatus[key];
+              const engineErr = aeoEngineErrors[key];
+              return (
+                <Card key={key} className={`bg-card border-white/10 flex-1 ${engineErr ? "border-red-500/30" : ""}`}>
+                  <CardContent className="pt-4 pb-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      {icon}
+                      <span className="text-sm font-medium text-foreground">{name}</span>
+                      {keyMissing && (
+                        <Badge variant="outline" className="ml-auto text-xs border-red-500/30 text-red-400">
+                          key missing
+                        </Badge>
+                      )}
+                      {engineErr && !keyMissing && (
+                        <Badge variant="outline" className="ml-auto text-xs border-red-500/30 text-red-400">
+                          error
+                        </Badge>
+                      )}
+                    </div>
+                    {engineData ? (
+                      <>
+                        <p className={`text-2xl font-bold ${
+                          engineData.citationShare >= 60 ? "text-emerald-400"
+                          : engineData.citationShare >= 30 ? "text-amber-400"
+                          : "text-red-400"
+                        }`}>{engineData.citationShare}%</p>
+                        <p className="text-xs text-muted-foreground">
+                          cited · {engineData.mentionsFound} mention{engineData.mentionsFound !== 1 ? "s" : ""}
+                        </p>
+                      </>
+                    ) : keyMissing ? (
+                      <p className="text-xs text-red-400/70">Add key to .env to enable</p>
+                    ) : engineErr ? (
+                      <p className="text-xs text-red-400/80 break-all">{engineErr.slice(0, 120)}</p>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No data yet</p>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+
+          {/* Results table (from latest run or DB history) */}
+          {(() => {
+            type TableRow = { query: string; chatgpt: AeoRunRow | null; claude: AeoRunRow | null; gemini: AeoRunRow | null };
+            const tableRows: TableRow[] = [];
+
+            if (aeoRunResults && aeoRunResults.length > 0) {
+              for (const qr of aeoRunResults) {
+                tableRows.push({
+                  query:   qr.query,
+                  chatgpt: qr.chatgpt ? { id: "", query: qr.query, engine: "chatgpt", cited: qr.chatgpt.cited ? 1 : 0, position: qr.chatgpt.position, context: null, excerpt: qr.chatgpt.excerpt, brandEntity: selectedAeoBrand, createdAt: null } : null,
+                  claude:  qr.claude  ? { id: "", query: qr.query, engine: "claude",  cited: qr.claude.cited  ? 1 : 0, position: qr.claude.position,  context: null, excerpt: qr.claude.excerpt,  brandEntity: selectedAeoBrand, createdAt: null } : null,
+                  gemini:  qr.gemini  ? { id: "", query: qr.query, engine: "gemini",  cited: qr.gemini.cited  ? 1 : 0, position: qr.gemini.position,  context: null, excerpt: qr.gemini.excerpt,  brandEntity: selectedAeoBrand, createdAt: null } : null,
+                });
+              }
+            } else if (aeoData?.recentResults?.length) {
+              const byQuery = new Map<string, TableRow>();
+              for (const row of aeoData.recentResults) {
+                if (!byQuery.has(row.query)) byQuery.set(row.query, { query: row.query, chatgpt: null, claude: null, gemini: null });
+                const tr = byQuery.get(row.query)!;
+                if (row.engine === "chatgpt") tr.chatgpt = row;
+                else if (row.engine === "claude") tr.claude = row;
+                else if (row.engine === "gemini") tr.gemini = row;
+              }
+              tableRows.push(...Array.from(byQuery.values()));
+            }
+
+            if (tableRows.length === 0) return (
+              <Card className="border-white/10 bg-card/50">
+                <CardContent className="py-10 text-center">
+                  <Zap className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+                  <p className="text-muted-foreground text-sm">Run a scan to see per-engine results here.</p>
+                </CardContent>
+              </Card>
+            );
+
+            const CitedCell = ({ row }: { row: AeoRunRow | null }) => {
+              if (!row) return <span className="text-muted-foreground text-xs">—</span>;
+              return row.cited === 1 ? (
+                <div className="flex items-center justify-center gap-1">
+                  <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />
+                  {row.position != null && <span className="text-xs text-muted-foreground">p{row.position}</span>}
+                </div>
+              ) : (
+                <XCircle className="h-3.5 w-3.5 text-muted-foreground mx-auto" />
+              );
+            };
+
+            const bestExcerpt = (tr: TableRow) =>
+              tr.chatgpt?.excerpt ?? tr.claude?.excerpt ?? tr.gemini?.excerpt ?? null;
+
+            const toggleRow = (i: number) => {
+              setExpandedRows((prev) => {
+                const next = new Set(prev);
+                next.has(i) ? next.delete(i) : next.add(i);
+                return next;
+              });
+            };
+
+            return (
+              <Card className="border-white/10 bg-card/50">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base">Prompt Results</CardTitle>
+                    {/* Issue 5 — Debug Mode toggle */}
+                    <div className="flex items-center gap-2">
+                      <Eye className="h-4 w-4 text-muted-foreground" />
+                      <Label htmlFor="debug-toggle" className="text-xs text-muted-foreground cursor-pointer">
+                        Debug Mode
+                      </Label>
+                      <Switch
+                        id="debug-toggle"
+                        checked={debugMode}
+                        onCheckedChange={setDebugMode}
+                      />
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="pt-0 overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-white/10 text-xs text-muted-foreground">
+                        <th className="text-left py-2 pr-3 font-medium w-4"></th>
+                        <th className="text-left py-2 pr-3 font-medium">Query</th>
+                        <th className="text-center py-2 px-2 font-medium w-20">ChatGPT</th>
+                        <th className="text-center py-2 px-2 font-medium w-20">Claude</th>
+                        <th className="text-left py-2 pl-3 font-medium">Excerpt</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tableRows.map((tr, i) => {
+                        const isExpanded = expandedRows.has(i);
+                        const responsePreviews = aeoResponseTexts[tr.query];
+                        return (
+                          <>
+                            {/* Main row — click to expand */}
+                            <tr
+                              key={`row-${i}`}
+                              className="border-b border-white/5 last:border-0 cursor-pointer hover:bg-white/[0.02] transition-colors"
+                              onClick={() => toggleRow(i)}
+                            >
+                              <td className="py-2 pl-1">
+                                {isExpanded
+                                  ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                                  : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                                }
+                              </td>
+                              <td className="py-2 pr-3 text-foreground max-w-[200px] truncate text-xs">{tr.query}</td>
+                              <td className="py-2 px-2 text-center"><CitedCell row={tr.chatgpt} /></td>
+                              <td className="py-2 px-2 text-center"><CitedCell row={tr.claude} /></td>
+                              <td className="py-2 pl-3 text-xs text-muted-foreground max-w-[200px] truncate">
+                                {bestExcerpt(tr) ?? "—"}
+                              </td>
+                            </tr>
+
+                            {/* Issue 4 — Expanded row: response preview */}
+                            {isExpanded && (
+                              <tr key={`expand-${i}`} className="border-b border-white/5">
+                                <td colSpan={6} className="pb-3 pt-1 px-2">
+                                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-white/[0.02] rounded-lg p-3">
+                                    {(["chatgpt", "claude"] as const).map((eng) => {
+                                      const preview = debugMode
+                                        ? (responsePreviews?.[eng] ?? null)
+                                        : (responsePreviews?.[eng]?.slice(0, 200) ?? null);
+                                      const cited = tr[eng]?.cited === 1;
+                                      return (
+                                        <div key={eng} className="space-y-1">
+                                          <div className="flex items-center gap-1.5">
+                                            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{eng}</span>
+                                            {tr[eng] ? (
+                                              cited
+                                                ? <CheckCircle className="h-3 w-3 text-emerald-400" />
+                                                : <XCircle className="h-3 w-3 text-muted-foreground" />
+                                            ) : null}
+                                          </div>
+                                          {preview ? (
+                                            <p className="text-xs text-muted-foreground leading-relaxed break-words">
+                                              {debugMode ? preview : `${preview}…`}
+                                            </p>
+                                          ) : tr[eng] === null ? (
+                                            <p className="text-xs text-muted-foreground/50 italic">Engine not run</p>
+                                          ) : (
+                                            <p className="text-xs text-muted-foreground/50 italic">Run again to see preview</p>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </CardContent>
+              </Card>
+            );
+          })()}
+        </TabsContent>
 
         <TabsContent value="dashboard" className="space-y-6">
           <div className="flex flex-wrap items-center gap-4">
@@ -629,6 +1082,40 @@ export default function AiMentionsPage() {
               ))
             )}
           </div>
+          {/* AEO Queries section (localStorage) */}
+          <div className="pt-4 border-t border-white/10">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <Zap className="h-4 w-4 text-purple-400" />
+                AEO Queries (used by Run Now)
+              </h3>
+              <Badge variant="outline" className="text-xs border-white/10">localStorage</Badge>
+            </div>
+            <div className="space-y-2">
+              {aeoQueries.map((q, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="flex-1 text-sm text-foreground bg-white/5 rounded px-3 py-1.5">{q}</span>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-400"
+                    onClick={() => setAeoQueries(aeoQueries.filter((_, j) => j !== i))}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+              <div className="flex gap-2 pt-1">
+                <Input
+                  value={newAeoQuery}
+                  onChange={(e) => setNewAeoQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && newAeoQuery.trim()) { setAeoQueries([...aeoQueries, newAeoQuery.trim()]); setNewAeoQuery(""); } }}
+                  placeholder="Add a new AEO query..."
+                  className="flex-1 h-8 text-sm"
+                />
+                <Button size="sm" variant="outline" className="gap-1"
+                  onClick={() => { if (newAeoQuery.trim()) { setAeoQueries([...aeoQueries, newAeoQuery.trim()]); setNewAeoQuery(""); } }}>
+                  <Plus className="h-3.5 w-3.5" /> Add
+                </Button>
+              </div>
+            </div>
+          </div>
         </TabsContent>
 
         <TabsContent value="brands" className="space-y-6">
@@ -729,6 +1216,41 @@ export default function AiMentionsPage() {
                 </Card>
               ))
             )}
+          </div>
+
+          {/* AEO Brands section (localStorage) */}
+          <div className="pt-4 border-t border-white/10">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <Zap className="h-4 w-4 text-purple-400" />
+                AEO Brand Names (used by Run Now)
+              </h3>
+              <Badge variant="outline" className="text-xs border-white/10">localStorage</Badge>
+            </div>
+            <div className="space-y-2">
+              {aeoBrands.map((b, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="flex-1 text-sm text-foreground bg-white/5 rounded px-3 py-1.5">{b}</span>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-400"
+                    onClick={() => setAeoBrands(aeoBrands.filter((_, j) => j !== i))}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+              <div className="flex gap-2 pt-1">
+                <Input
+                  value={newAeoBrand}
+                  onChange={(e) => setNewAeoBrand(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && newAeoBrand.trim()) { setAeoBrands([...aeoBrands, newAeoBrand.trim()]); setNewAeoBrand(""); } }}
+                  placeholder="Add brand name..."
+                  className="flex-1 h-8 text-sm"
+                />
+                <Button size="sm" variant="outline" className="gap-1"
+                  onClick={() => { if (newAeoBrand.trim()) { setAeoBrands([...aeoBrands, newAeoBrand.trim()]); setNewAeoBrand(""); } }}>
+                  <Plus className="h-3.5 w-3.5" /> Add
+                </Button>
+              </div>
+            </div>
           </div>
         </TabsContent>
       </Tabs>

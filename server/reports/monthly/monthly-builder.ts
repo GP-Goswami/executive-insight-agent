@@ -16,9 +16,6 @@ import { reportDrafts, type InsertReportDraft } from "@shared/schema";
 import { BaseAgent, type AgentResult } from "../../agents/base-agent";
 import {
   resolveProperty,
-  getMaxDataDate,
-  buildMonthlyPeriods,
-  loadTrafficSnapshot,
   loadContentHighlights,
   computeTechnicalHealth,
   loadRecommendations,
@@ -29,6 +26,7 @@ import {
   type RecommendationRow,
   type ResolvedProperty,
 } from "../shared/report-data";
+import { liveSnapshot, withGscOverride } from "../shared/live-snapshot";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -91,12 +89,26 @@ export interface MonthlyReportContent {
   };
 }
 
+/** Optional explicit "current" window for the report. When omitted the report
+ *  anchors on the latest available data date (last 30 days). */
+export interface MonthlyRunOpts {
+  start?: string; // yyyy-MM-dd (inclusive)
+  end?: string;   // yyyy-MM-dd (inclusive)
+  gscSiteUrl?: string; // override when the property record has no GSC site URL
+}
+
 export class MonthlyReportAgent extends BaseAgent {
   readonly agentId = "A14";
   readonly model = MONTHLY_MODEL;
 
+  /** Set before execute() to report on a specific date range instead of the default. */
+  runOpts?: MonthlyRunOpts;
+
   protected async computeInputHash(tenantId: string): Promise<string | undefined> {
-    return this.sha256({ tenantId, kind: "monthly", month: new Date().toISOString().slice(0, 7) });
+    const range = this.runOpts?.start && this.runOpts?.end
+      ? `${this.runOpts.start}_${this.runOpts.end}`
+      : new Date().toISOString().slice(0, 7);
+    return this.sha256({ tenantId, kind: "monthly", range });
   }
 
   async run(tenantId: string): Promise<AgentResult> {
@@ -107,7 +119,7 @@ export class MonthlyReportAgent extends BaseAgent {
       return this.result(empty);
     }
 
-    const content = await this.assemble(prop, tenantId);
+    const content = await this.assemble(prop, tenantId, this.runOpts);
 
     const row: InsertReportDraft = {
       tenantId,
@@ -127,18 +139,35 @@ export class MonthlyReportAgent extends BaseAgent {
     return this.result({ reportDraftId: inserted.id, reportType: "monthly", content });
   }
 
-  async assemble(prop: ResolvedProperty, tenantId: string): Promise<MonthlyReportContent> {
-    const maxDate = await getMaxDataDate(prop.propertyId);
-    const { current, previous, yearAgo } = buildMonthlyPeriods(maxDate);
+  async assemble(prop: ResolvedProperty, tenantId: string, opts?: MonthlyRunOpts): Promise<MonthlyReportContent> {
+    // Anchor the report on an explicit range when provided, else the latest data date.
+    let current: PeriodRange, previous: PeriodRange, yearAgo: PeriodRange, anchorEnd: Date;
+    if (opts?.start && opts?.end) {
+      ({ current, previous, yearAgo } = buildPeriodsFromRange(opts.start, opts.end));
+      anchorEnd = new Date(`${opts.end}T00:00:00.000Z`);
+    } else {
+      // Default = the last COMPLETE calendar month. Run on the 1st of a month and
+      // you get the previous month's report (e.g. in June → May 1–31), with MoM
+      // comparing against the month before (April).
+      ({ current, previous, yearAgo } = buildLastCalendarMonthPeriods());
+      anchorEnd = new Date(`${current.end}T00:00:00.000Z`);
+    }
+
+    // Use the caller-supplied GSC site URL when the stored property has none —
+    // this is what makes the search KPIs populate (the property record is often
+    // missing gscSiteUrl even though the dashboard knows it).
+    const effectiveProp = withGscOverride(prop, opts?.gscSiteUrl);
+    this.log(`monthly assemble: ga4=${effectiveProp.ga4PropertyId || "none"}, gsc=${effectiveProp.gscSiteUrl || "NONE — search KPIs will be 0"}, period ${current.start}..${current.end}`);
 
     // MoM and YoY snapshots (current is shared; comparison differs).
+    // Uses live GA4/GSC so search KPIs are real even when the daily tables are unsynced.
     const [mom, yoy, topPages, actions, agentRuns, healthTrend] = await Promise.all([
-      loadTrafficSnapshot(prop.propertyId, current, previous),
-      loadTrafficSnapshot(prop.propertyId, current, yearAgo),
-      loadContentHighlights(prop, current, 12),
+      liveSnapshot(effectiveProp, current, previous),
+      liveSnapshot(effectiveProp, current, yearAgo),
+      loadContentHighlights(effectiveProp, current, 12),
       loadRecommendations(tenantId, 8),
       loadAgentRunIds(tenantId, 40),
-      this.buildHealthTrend(prop.propertyId, maxDate),
+      this.buildHealthTrend(effectiveProp, anchorEnd),
     ]);
 
     const yoyAvailable = yoy.users.previous > 0 || yoy.clicks.previous > 0 || yoy.impressions.previous > 0;
@@ -183,20 +212,22 @@ export class MonthlyReportAgent extends BaseAgent {
     };
   }
 
-  /** Technical health score across the three trailing 30-day windows. */
-  private async buildHealthTrend(propertyId: string, maxDate: Date): Promise<HealthTrendPoint[]> {
+  /** Technical health score across the current report month and the two
+   *  preceding calendar months (e.g. May → April → March). */
+  private async buildHealthTrend(prop: ResolvedProperty, currentMonthEnd: Date): Promise<HealthTrendPoint[]> {
     const points: HealthTrendPoint[] = [];
+    const baseY = currentMonthEnd.getUTCFullYear();
+    const baseM = currentMonthEnd.getUTCMonth(); // month of the current report period
     for (let i = 2; i >= 0; i--) {
-      const end = new Date(maxDate);
-      end.setDate(end.getDate() - 30 * i);
-      const start = new Date(end);
-      start.setDate(start.getDate() - 29);
+      // i calendar months before the current report month.
+      const monthStart = new Date(Date.UTC(baseY, baseM - i, 1));
+      const monthEnd = new Date(Date.UTC(baseY, baseM - i + 1, 0)); // last day of that month
       const period: PeriodRange = {
-        start: start.toISOString().slice(0, 10),
-        end: end.toISOString().slice(0, 10),
+        start: monthStart.toISOString().slice(0, 10),
+        end: monthEnd.toISOString().slice(0, 10),
         label: i === 0 ? "This month" : `${i} month(s) ago`,
       };
-      const snap = await loadTrafficSnapshot(propertyId, period, period);
+      const snap = await liveSnapshot(prop, period, period);
       const health = computeTechnicalHealth(snap);
       points.push({ period: period.end, label: period.label, score: health.score, status: health.status });
     }
@@ -297,11 +328,68 @@ export class MonthlyReportAgent extends BaseAgent {
   }
 }
 
-export function runMonthlyReport(tenantId: string): Promise<AgentResult> {
-  return new MonthlyReportAgent().execute(tenantId);
+export function runMonthlyReport(tenantId: string, opts?: MonthlyRunOpts): Promise<AgentResult> {
+  const agent = new MonthlyReportAgent();
+  agent.runOpts = opts;
+  return agent.execute(tenantId);
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function monthLabel(d: Date): string {
+  return `${MONTH_NAMES[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+/** Build windows for the last COMPLETE calendar month (current = previous month),
+ *  with previous = the month before it and yearAgo = the same month last year. */
+function buildLastCalendarMonthPeriods(): { current: PeriodRange; previous: PeriodRange; yearAgo: PeriodRange } {
+  const toYmd = (d: Date) => d.toISOString().slice(0, 10);
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth(); // current month index
+
+  // current = previous calendar month
+  const curStart = new Date(Date.UTC(y, m - 1, 1));
+  const curEnd = new Date(Date.UTC(y, m, 0)); // last day of previous month
+  // previous = the month before current
+  const prevStart = new Date(Date.UTC(y, m - 2, 1));
+  const prevEnd = new Date(Date.UTC(y, m - 1, 0));
+  // year-ago = same month, previous year
+  const yaStart = new Date(Date.UTC(y - 1, m - 1, 1));
+  const yaEnd = new Date(Date.UTC(y - 1, m, 0));
+
+  return {
+    current: { start: toYmd(curStart), end: toYmd(curEnd), label: monthLabel(curStart) },
+    previous: { start: toYmd(prevStart), end: toYmd(prevEnd), label: monthLabel(prevStart) },
+    yearAgo: { start: toYmd(yaStart), end: toYmd(yaEnd), label: monthLabel(yaStart) },
+  };
+}
+
+/** Build current/previous/year-ago windows from an explicit inclusive date range.
+ *  Previous = the equal-length window immediately before current; year-ago = current shifted -365d. */
+function buildPeriodsFromRange(start: string, end: string): { current: PeriodRange; previous: PeriodRange; yearAgo: PeriodRange } {
+  const toYmd = (d: Date) => d.toISOString().slice(0, 10);
+  const shift = (s: string, days: number) => {
+    const d = new Date(`${s}T00:00:00.000Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return toYmd(d);
+  };
+  const s = new Date(`${start}T00:00:00.000Z`);
+  const e = new Date(`${end}T00:00:00.000Z`);
+  const lenDays = Math.max(0, Math.round((e.getTime() - s.getTime()) / 86_400_000)); // inclusive span - 1
+
+  const prevEnd = shift(start, -1);
+  const prevStart = shift(prevEnd, -lenDays);
+  const yaStart = shift(start, -365);
+  const yaEnd = shift(end, -365);
+
+  return {
+    current: { start, end, label: "Selected period" },
+    previous: { start: prevStart, end: prevEnd, label: "Previous period" },
+    yearAgo: { start: yaStart, end: yaEnd, label: "Same period last year" },
+  };
+}
 
 function kpi(key: string, label: string, unit: KpiMoMYoY["unit"], mom: MetricDelta, yoy: MetricDelta, yoyAvailable: boolean): KpiMoMYoY {
   return { key, label, unit, current: mom.current, mom, yoy, yoyAvailable };

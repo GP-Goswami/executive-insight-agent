@@ -60,7 +60,7 @@ function Delta({ pct, invert }: { pct: number | null; invert?: boolean }) {
 }
 
 export default function MonthlyReportPage() {
-  const { ga4PropertyId, domain } = useDomain();
+  const { ga4PropertyId, domain, gscSiteUrl } = useDomain();
   const { toast } = useToast();
 
   const { data, isLoading } = useQuery<MonthlyResponse>({
@@ -75,12 +75,15 @@ export default function MonthlyReportPage() {
 
   const runMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/reports/monthly/run", { tenantId: ga4PropertyId });
+      // No date range — the server reports on the last complete calendar month.
+      const body: { tenantId: string; gscSiteUrl?: string } = { tenantId: ga4PropertyId };
+      if (gscSiteUrl) body.gscSiteUrl = gscSiteUrl; // lets the server fetch live GSC
+      const res = await apiRequest("POST", "/api/reports/monthly/run", body);
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/reports/monthly", ga4PropertyId] });
-      toast({ title: "Monthly report generated", description: "Narrative, KPIs and roadmap refreshed." });
+      toast({ title: "Monthly report generated", description: "Last complete calendar month refreshed." });
     },
     onError: (err: Error) => toast({ title: "Generation failed", description: err.message, variant: "destructive" }),
   });
@@ -109,7 +112,6 @@ export default function MonthlyReportPage() {
   }
 
   const content = data?.content;
-  const yoyAvailable = content?.kpis.some((k) => k.yoyAvailable) ?? false;
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
@@ -117,11 +119,20 @@ export default function MonthlyReportPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Monthly Strategic Report</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {content ? `${content.meta.domain} · ${content.meta.current.start} → ${content.meta.current.end}` : "Strategic report — narrative, MoM/YoY, roadmap"}
-          </p>
+          {content ? (
+            <div className="mt-1 space-y-0.5">
+              <p className="text-sm text-foreground">
+                {content.meta.domain} · <span className="font-medium">This period:</span> {content.meta.current.start} → {content.meta.current.end}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                MoM vs {content.meta.previous.start} → {content.meta.previous.end}
+              </p>
+            </div>
+          ) : (
+            <p className="mt-1 text-sm text-muted-foreground">Strategic report — narrative, MoM/YoY, roadmap</p>
+          )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" disabled={runMutation.isPending} onClick={() => runMutation.mutate()}>
             {runMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             {content ? "Regenerate" : "Generate"}
@@ -155,27 +166,25 @@ export default function MonthlyReportPage() {
             </Card>
           </section>
 
-          {/* 2. KPI MoM + YoY */}
+          {/* 2. KPI MoM (month-over-month) */}
           <section>
-            <SectionTitle index={2} icon={TrendingUp}>KPI Performance — MoM &amp; YoY</SectionTitle>
+            <SectionTitle index={2} icon={TrendingUp}>KPI Performance — Month over Month</SectionTitle>
             <Card className="border-white/10 bg-card/50">
               <CardContent className="p-0">
-                <div className="grid grid-cols-[2fr_1fr_1fr_1fr] gap-2 px-4 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  <span>Metric</span><span className="text-right">This month</span><span className="text-right">MoM</span><span className="text-right">YoY</span>
+                <div className="grid grid-cols-[2fr_1fr_1fr] gap-2 px-4 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  <span>Metric</span><span className="text-right">This period</span><span className="text-right">MoM</span>
                 </div>
                 <div className="divide-y divide-white/5">
                   {content.kpis.map((k) => (
-                    <div key={k.key} className="grid grid-cols-[2fr_1fr_1fr_1fr] gap-2 px-4 py-2.5 text-sm">
+                    <div key={k.key} className="grid grid-cols-[2fr_1fr_1fr] gap-2 px-4 py-2.5 text-sm">
                       <span className="text-foreground/90">{k.label}</span>
                       <span className="text-right font-medium text-foreground">{num(k.current)}{k.unit === "pct" ? "%" : ""}</span>
                       <span className="text-right"><Delta pct={k.mom.deltaPct} invert={k.unit === "position"} /></span>
-                      <span className="text-right">{k.yoyAvailable ? <Delta pct={k.yoy.deltaPct} invert={k.unit === "position"} /> : <span className="text-muted-foreground">—</span>}</span>
                     </div>
                   ))}
                 </div>
               </CardContent>
             </Card>
-            {!yoyAvailable && <p className="mt-2 text-xs italic text-muted-foreground">Year-over-year not yet available — this is the first year of tracked data.</p>}
           </section>
 
           {/* 3. Content Portfolio Health */}

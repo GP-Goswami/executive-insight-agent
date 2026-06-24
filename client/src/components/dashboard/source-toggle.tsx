@@ -6,24 +6,32 @@ export type DataSource = "semrush" | "ga4" | "gsc";
 interface SourceToggleProps {
   activeSource: DataSource;
   onSourceChange: (source: DataSource) => void;
+  /** Which source tabs to show. Defaults to all three. */
+  sources?: DataSource[];
 }
 
-export function SourceToggle({ activeSource, onSourceChange }: SourceToggleProps) {
+const SOURCE_TABS: Record<DataSource, { label: string; icon: typeof Search; activeClass: string }> = {
+  semrush: { label: "SEMrush", icon: BrainCircuit, activeClass: "data-[state=active]:bg-purple-500/20 data-[state=active]:text-purple-400" },
+  ga4: { label: "GA4", icon: BarChart3, activeClass: "data-[state=active]:bg-cyan-500/20 data-[state=active]:text-cyan-400" },
+  gsc: { label: "GSC", icon: Search, activeClass: "data-[state=active]:bg-amber-500/20 data-[state=active]:text-amber-400" },
+};
+
+export function SourceToggle({ activeSource, onSourceChange, sources = ["semrush", "ga4", "gsc"] }: SourceToggleProps) {
   return (
     <Tabs value={activeSource} onValueChange={(val) => onSourceChange(val as DataSource)} className="mb-6">
-      <TabsList className="grid w-full max-w-lg grid-cols-3 bg-muted/50 border border-white/10 p-1 h-12">
-        <TabsTrigger value="semrush" className="flex items-center gap-2 data-[state=active]:bg-purple-500/20 data-[state=active]:text-purple-400 rounded-md">
-          <BrainCircuit className="h-4 w-4" />
-          <span className="font-semibold block">SEMrush</span>
-        </TabsTrigger>
-        <TabsTrigger value="ga4" className="flex items-center gap-2 data-[state=active]:bg-cyan-500/20 data-[state=active]:text-cyan-400 rounded-md">
-          <BarChart3 className="h-4 w-4" />
-          <span className="font-semibold block">GA4</span>
-        </TabsTrigger>
-        <TabsTrigger value="gsc" className="flex items-center gap-2 data-[state=active]:bg-amber-500/20 data-[state=active]:text-amber-400 rounded-md">
-          <Search className="h-4 w-4" />
-          <span className="font-semibold block">GSC</span>
-        </TabsTrigger>
+      <TabsList
+        className="grid w-full max-w-lg bg-muted/50 border border-white/10 p-1 h-12"
+        style={{ gridTemplateColumns: `repeat(${sources.length}, minmax(0, 1fr))` }}
+      >
+        {sources.map((source) => {
+          const { label, icon: Icon, activeClass } = SOURCE_TABS[source];
+          return (
+            <TabsTrigger key={source} value={source} className={`flex items-center gap-2 ${activeClass} rounded-md`}>
+              <Icon className="h-4 w-4" />
+              <span className="font-semibold block">{label}</span>
+            </TabsTrigger>
+          );
+        })}
       </TabsList>
     </Tabs>
   );

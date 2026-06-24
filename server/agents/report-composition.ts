@@ -55,6 +55,15 @@ export class ReportCompositionAgent extends BaseAgent {
     const anomalies = (a08?.anomalies ?? []) as Array<{ metric: string; severity: string; summary?: string; rootCause?: string }>;
     const a09Recs = (a09?.recommendations ?? []) as Array<{ priority: number; statement: string; effort: string; impact: string }>;
 
+    // ── Read latest A07 (AEO visibility) ─────────────────────────────────────
+    const a07Entries = await readFromScratchpad("A07", tenantId, week);
+    const a07 = a07Entries[0]?.findings as {
+      citationShare?: number;
+      avgPosition?: number;
+      byEngine?: Record<string, { citationShare: number; mentionsFound: number }>;
+      topQuery?: string | null;
+    } | undefined;
+
     // ── Read latest A04 (content performance) + A02 (keyword intelligence) ───────
     // These deterministic agents store full findings in agent_runs.output.
     const a04Run = await this.loadLatestAgentOutput("A04", tenantId);
@@ -95,6 +104,7 @@ export class ReportCompositionAgent extends BaseAgent {
       ...a09Entries.map((e) => `A09:${e.runId ?? "unknown"}`),
       ...(a04Run ? [`A04:${a04Run.runId}`] : []),
       ...(a02Run ? [`A02:${a02Run.runId}`] : []),
+      ...a07Entries.map((e) => `A07:${e.runId ?? "unknown"}`),
     ];
 
     const reportContent = {
@@ -122,6 +132,17 @@ export class ReportCompositionAgent extends BaseAgent {
       ...(contentHighlights ? { contentHighlights } : {}),
       // A02 — keyword movement (top 5 movers + top 3 CTR opps + cannibalization).
       ...(keywordMovement ? { keywordMovement } : {}),
+      // A07 — AEO visibility snapshot (omitted if no A07 run this week).
+      ...(a07?.citationShare != null
+        ? {
+            aeoSnapshot: {
+              citationShare: a07.citationShare,
+              avgPosition: a07.avgPosition ?? 0,
+              byEngine: a07.byEngine ?? {},
+              topQuery: a07.topQuery ?? null,
+            },
+          }
+        : {}),
       recommendationsSection: {
         count: approvedRecs.length,
         items: approvedRecs.slice(0, 5),
@@ -144,6 +165,7 @@ export class ReportCompositionAgent extends BaseAgent {
       pdfUrl: null,
       analystNotes: null,
       approvedAt: null,
+      pipeline: "A10",
     };
     const [inserted] = await db.insert(reportDrafts).values(row).returning({ id: reportDrafts.id });
 

@@ -70,7 +70,7 @@ function MovePill({ delta }: { delta: number | null }) {
 
 // ── Page ────────────────────────────────────────────────────────────────────────
 export default function WeeklyReportPage() {
-  const { ga4PropertyId, domain } = useDomain();
+  const { ga4PropertyId, domain, gscSiteUrl } = useDomain();
   const { toast } = useToast();
 
   const { data, isLoading } = useQuery<WeeklyResponse>({
@@ -85,7 +85,9 @@ export default function WeeklyReportPage() {
 
   const runMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/reports/weekly/run", { tenantId: ga4PropertyId });
+      const body: { tenantId: string; gscSiteUrl?: string } = { tenantId: ga4PropertyId };
+      if (gscSiteUrl) body.gscSiteUrl = gscSiteUrl; // lets the server fetch live GSC
+      const res = await apiRequest("POST", "/api/reports/weekly/run", body);
       return res.json();
     },
     onSuccess: () => {

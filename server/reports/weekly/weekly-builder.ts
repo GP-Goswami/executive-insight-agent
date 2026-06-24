@@ -17,9 +17,6 @@ import { reportDrafts, type InsertReportDraft } from "@shared/schema";
 import { BaseAgent, type AgentResult } from "../../agents/base-agent";
 import {
   resolveProperty,
-  getMaxDataDate,
-  buildWeeklyPeriods,
-  loadTrafficSnapshot,
   loadDailySeries,
   loadRankingMovement,
   loadContentHighlights,
@@ -38,6 +35,7 @@ import {
   type RecommendationRow,
   type ResolvedProperty,
 } from "../shared/report-data";
+import { liveSnapshot, withGscOverride } from "../shared/live-snapshot";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -69,9 +67,17 @@ export interface WeeklyReportContent {
   actions: RecommendationRow[];
 }
 
+/** Optional overrides for a weekly run (e.g. the dashboard's GSC site URL). */
+export interface WeeklyRunOpts {
+  gscSiteUrl?: string;
+}
+
 export class WeeklyReportAgent extends BaseAgent {
   readonly agentId = "A10";
   readonly model = WEEKLY_MODEL;
+
+  /** Set before execute() to thread overrides into run(). */
+  runOpts?: WeeklyRunOpts;
 
   protected async computeInputHash(tenantId: string): Promise<string | undefined> {
     return this.sha256({ tenantId, kind: "weekly", day: new Date().toISOString().slice(0, 10) });
@@ -85,7 +91,7 @@ export class WeeklyReportAgent extends BaseAgent {
       return this.result(empty);
     }
 
-    const content = await this.assemble(prop, tenantId);
+    const content = await this.assemble(prop, tenantId, this.runOpts);
 
     // Persist to report_drafts.
     const row: InsertReportDraft = {
@@ -97,6 +103,7 @@ export class WeeklyReportAgent extends BaseAgent {
       pdfUrl: null,
       analystNotes: null,
       approvedAt: null,
+      pipeline: "weekly_builder",
     };
     const [inserted] = await db.insert(reportDrafts).values(row).returning({ id: reportDrafts.id });
     content.meta.runId = this.runId;
@@ -114,18 +121,21 @@ export class WeeklyReportAgent extends BaseAgent {
   }
 
   /** Assemble the full weekly content (used by run() and available for PDF rebuilds). */
-  async assemble(prop: ResolvedProperty, tenantId: string): Promise<WeeklyReportContent> {
-    const maxDate = await getMaxDataDate(prop.propertyId);
-    const { current, previous } = buildWeeklyPeriods(maxDate);
+  async assemble(prop: ResolvedProperty, tenantId: string, opts?: WeeklyRunOpts): Promise<WeeklyReportContent> {
+    // Report on the last COMPLETE calendar week (Mon–Sun). Run on a Monday and you
+    // get the week that just finished, with WoW comparing the week before that.
+    const { current, previous } = buildLastCompleteWeekPeriods();
+    const effectiveProp = withGscOverride(prop, opts?.gscSiteUrl);
+    this.log(`weekly assemble: ga4=${effectiveProp.ga4PropertyId || "none"}, gsc=${effectiveProp.gscSiteUrl || "NONE — search KPIs will be 0"}, week ${current.start}..${current.end}`);
 
     const [trafficSnapshot, dailySeries, rankingMovement, contentHighlights, backlinks, aeo, actions] =
       await Promise.all([
-        loadTrafficSnapshot(prop.propertyId, current, previous),
-        loadDailySeries(prop.propertyId, current),
-        loadRankingMovement(prop, current, previous),
-        loadContentHighlights(prop, current),
-        loadBacklinkSummary(prop.name),
-        loadAeoSnapshot(prop, current),
+        liveSnapshot(effectiveProp, current, previous),
+        loadDailySeries(effectiveProp.propertyId, current),
+        loadRankingMovement(effectiveProp, current, previous),
+        loadContentHighlights(effectiveProp, current),
+        loadBacklinkSummary(effectiveProp.name),
+        loadAeoSnapshot(effectiveProp, current),
         loadRecommendations(tenantId),
       ]);
 
@@ -214,11 +224,37 @@ export class WeeklyReportAgent extends BaseAgent {
   }
 }
 
-export function runWeeklyReport(tenantId: string): Promise<AgentResult> {
-  return new WeeklyReportAgent().execute(tenantId);
+export function runWeeklyReport(tenantId: string, opts?: WeeklyRunOpts): Promise<AgentResult> {
+  const agent = new WeeklyReportAgent();
+  agent.runOpts = opts;
+  return agent.execute(tenantId);
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+/** Last COMPLETE calendar week (Monday–Sunday), with the prior week for WoW. */
+function buildLastCompleteWeekPeriods(): { current: PeriodRange; previous: PeriodRange } {
+  const toYmd = (d: Date) => d.toISOString().slice(0, 10);
+  const now = new Date();
+  const dow = now.getUTCDay();              // 0=Sun … 6=Sat
+  const daysSinceMonday = (dow + 6) % 7;    // Mon=0, Tue=1 … Sun=6
+
+  // Monday of the current (in-progress) week.
+  const mondayThisWeek = new Date(now);
+  mondayThisWeek.setUTCDate(now.getUTCDate() - daysSinceMonday);
+
+  // current = last complete week (previous Mon–Sun)
+  const curEnd = new Date(mondayThisWeek);  curEnd.setUTCDate(mondayThisWeek.getUTCDate() - 1); // Sunday
+  const curStart = new Date(curEnd);        curStart.setUTCDate(curEnd.getUTCDate() - 6);        // Monday
+  // previous = the week before that
+  const prevEnd = new Date(curStart);       prevEnd.setUTCDate(curStart.getUTCDate() - 1);
+  const prevStart = new Date(prevEnd);      prevStart.setUTCDate(prevEnd.getUTCDate() - 6);
+
+  return {
+    current: { start: toYmd(curStart), end: toYmd(curEnd), label: "This week" },
+    previous: { start: toYmd(prevStart), end: toYmd(prevEnd), label: "Previous week" },
+  };
+}
 
 function deltaText(pct: number | null): string {
   if (pct === null) return "n/a";

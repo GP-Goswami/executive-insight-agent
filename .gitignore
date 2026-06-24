@@ -1,51 +1,51 @@
-# # Dependencies
-# node_modules/
+# Dependencies
+node_modules/
 
-# # Build files
-# dist/
+# Build files
+dist/
 
-# # System files
-# .DS_Store
+# System files
+.DS_Store
 
-# # Env & secrets
-# .env
-# .env.*
+# Env & secrets
+.env
+.env.*
 
-# # Logs
-# *.log
+# Logs
+*.log
 
-# # Local configs
-# .config/
-# .local/
-# .claude/
+# Local configs
+.config/
+.local/
+.claude/
 
-# # Temporary / scratch
-# scratch.txt
+# Temporary / scratch
+scratch.txt
 
-# # Assets / sensitive data
-# attached_assets/
-# generated-reports/
+# Assets / sensitive data
+attached_assets/
+generated-reports/
 
-# # Server public (if generated)
-# server/public/
+# Server public (if generated)
+server/public/
 
-# # Vite temp configs
-# vite.config.ts.*
+# Vite temp configs
+vite.config.ts.*
 
-# # Archives
-# *.tar.gz
+# Archives
+*.tar.gz
 
-# # Project-specific docs (optional ignore)
-# SKILL.md
-# DASHBOARD_DATA_GUIDE.md
+# Project-specific docs (optional ignore)
+SKILL.md
+DASHBOARD_DATA_GUIDE.md
 
-# # Cache / fingerprint
-# .fingerprint
+# Cache / fingerprint
+.fingerprint
 
-# # Optional (careful)
-# # Uncomment only if you don't want to track these:
-# # package-lock.json
-# # package.json
+# Optional (careful)
+# Uncomment only if you don't want to track these:
+# package-lock.json
+# package.json
 
 # dependencies
 node_modules/
@@ -86,5 +86,4 @@ node_modules/**
 drizzle/meta/
 
 script/test-pg-conn.cjs
-CLAUDE.md
 specs/

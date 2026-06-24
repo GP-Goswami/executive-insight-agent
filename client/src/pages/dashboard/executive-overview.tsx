@@ -128,6 +128,29 @@ export default function ExecutiveOverview() {
   const topPagesNeedsConfig = !ga4PropertyId;
   const topPagesNeedsPropertyId = false;
 
+  // GSC summary fallback — the /api/metrics/overview endpoint resolves gscSiteUrl
+  // via an internal domain match that can miss, returning 0 clicks/impressions.
+  // Query GSC directly by siteUrl so the search KPIs are always populated.
+  const { data: gscSummary } = useQuery<{ clicks?: number; impressions?: number; ctr?: number; position?: number }>({
+    queryKey: ["/api/metrics/gsc/summary", gscSiteUrl, appliedRange?.from?.toISOString(), appliedRange?.to?.toISOString()],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set("siteUrl", gscSiteUrl!);
+      if (appliedRange?.from) params.set("start", appliedRange.from.toISOString().slice(0, 10));
+      if (appliedRange?.to) params.set("end", appliedRange.to.toISOString().slice(0, 10));
+      const res = await fetch(`/api/metrics/gsc/summary?${params}`, { credentials: "include" });
+      if (!res.ok) return {};
+      return res.json();
+    },
+    enabled: !!gscSiteUrl,
+    retry: false,
+  });
+
+  // Prefer overview's GSC values when present; fall back to the direct GSC call.
+  const gscClicks = (metrics?.clicks ?? 0) > 0 ? metrics!.clicks : (gscSummary?.clicks ?? 0);
+  const gscImpressions = (metrics?.impressions ?? 0) > 0 ? metrics!.impressions : (gscSummary?.impressions ?? 0);
+  const gscPosition = (metrics?.position ?? 0) > 0 ? metrics!.position : (gscSummary?.position ?? 0);
+
   const handleApply = () => {
     setAppliedRange(dateRange);
   };
@@ -228,7 +251,7 @@ export default function ExecutiveOverview() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <KpiCard
               title="Ground-Truth Clicks"
-              value={metrics.clicks}
+              value={gscClicks}
               icon={Users}
               accent="cyan"
               changeLabel="Source: GSC"
@@ -261,14 +284,14 @@ export default function ExecutiveOverview() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4">
             <KpiCard
               title="Total Impressions"
-              value={metrics.impressions}
+              value={gscImpressions}
               icon={MousePointerClick}
               accent="cyan"
               changeLabel="Source: GSC"
             />
             <KpiCard
               title="Avg Search Position"
-              value={metrics.position}
+              value={gscPosition}
               icon={Target}
               accent="green"
               changeLabel="Source: GSC"

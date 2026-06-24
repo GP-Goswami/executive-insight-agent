@@ -184,7 +184,7 @@ export default function AiReferrersPage() {
         />
       </div>
 
-      <SourceToggle activeSource={activeSource} onSourceChange={setActiveSource} />
+      <SourceToggle activeSource={activeSource} onSourceChange={setActiveSource} sources={["ga4"]} />
 
       {activeSource === "ga4" && needsPropertyId && (
         <Alert>

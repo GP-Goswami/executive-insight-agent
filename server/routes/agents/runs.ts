@@ -1,4 +1,5 @@
-// Agent runs API — read-only; no mutations.
+// Agent runs API.
+// PATCH /runs/:id  → cancel / mark-stuck run as failed
 // GET /runs              → list runs (filterable by status, agentId, limit)
 // GET /runs/cost-summary → weekly cost grouped by agent
 
@@ -118,6 +119,28 @@ router.get("/runs/cost-summary", async (req, res) => {
     return res.json({ days: Number(days), totalRuns, totalCostUsd: totalCost, byAgent: summary });
   } catch (err) {
     console.error("[routes/runs] GET /runs/cost-summary error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// PATCH /runs/:id — cancel a stuck run.
+// Only allowed transition: running → cancelled (safe; never deletes).
+router.patch("/runs/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const [row] = await db.select().from(agentRuns).where(eq(agentRuns.id, id)).limit(1);
+    if (!row) return res.status(404).json({ error: "Run not found" });
+    if (row.status !== "running") {
+      return res.status(409).json({ error: `Run is already ${row.status} — only running runs can be cancelled` });
+    }
+    const [updated] = await db
+      .update(agentRuns)
+      .set({ status: "cancelled", completedAt: new Date(), error: "Cancelled by analyst" })
+      .where(eq(agentRuns.id, id))
+      .returning();
+    return res.json(updated);
+  } catch (err) {
+    console.error("[routes/runs] PATCH /runs/:id error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });

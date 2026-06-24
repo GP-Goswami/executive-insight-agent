@@ -1427,6 +1427,13 @@ export interface AISectionReportDraft {
       ctrOpportunities?: Array<{ query?: string; impressions?: number; ctr?: number; expectedCtr?: number; potentialExtraClicks?: number }>;
       cannibalization?: Array<{ query?: string; pageCount?: number; totalImpressions?: number; pages?: Array<{ page?: string; impressions?: number }> }>;
     };
+    // A07 — AEO/GEO visibility snapshot.
+    aeoSnapshot?: {
+      citationShare?: number;
+      avgPosition?: number;
+      byEngine?: Record<string, { citationShare?: number; mentionsFound?: number }>;
+      topQuery?: string | null;
+    };
     appendix?: {
       weekNumber?: number;
       generatedAt?: string;
@@ -1557,6 +1564,56 @@ export function addAIGeneratedSections(
         doc.fillColor("#64748b").font("Helvetica").fontSize(8).text(cleanText(`${c.pageCount ?? 0} pages  |  ${pages}`), M + 12, doc.y, { width: W - 12 });
         doc.moveDown(0.35);
       }
+    }
+  }
+
+  // AEO Snapshot (A07) — inserted after Keyword Movement, before Recommendations.
+  const aeo = reportDraft.content.aeoSnapshot;
+  if (aeo && aeo.citationShare != null) {
+    addSectionHeading("AEO / GEO Visibility Snapshot");
+    doc.fillColor("#334155").font("Helvetica").fontSize(10);
+
+    doc
+      .fillColor("#0f172a")
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .text(
+        cleanText(`Overall Citation Share: ${aeo.citationShare}%`),
+        M, doc.y, { width: W },
+      );
+    doc.moveDown(0.3);
+
+    if (aeo.avgPosition != null && aeo.avgPosition > 0) {
+      doc
+        .fillColor("#475569")
+        .font("Helvetica")
+        .fontSize(9)
+        .text(cleanText(`Average mention position: paragraph ${aeo.avgPosition}`), M, doc.y, { width: W });
+      doc.moveDown(0.4);
+    }
+
+    // Per-engine breakdown
+    const engines = Object.entries(aeo.byEngine ?? {}) as [string, { citationShare?: number; mentionsFound?: number }][];
+    if (engines.length > 0) {
+      doc.moveDown(0.3);
+      doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(10).text(cleanText("Citation Share by Engine"), M, doc.y, { width: W });
+      doc.moveDown(0.3);
+      for (const [eng, stats] of engines) {
+        const share = stats.citationShare ?? 0;
+        const mentions = stats.mentionsFound ?? 0;
+        const shareColor = share >= 60 ? "#16a34a" : share >= 30 ? "#ca8a04" : "#dc2626";
+        doc
+          .fillColor(shareColor)
+          .font("Helvetica-Bold")
+          .fontSize(9)
+          .text(cleanText(`${eng.toUpperCase()}:  ${share}% cited  (${mentions} mention${mentions !== 1 ? "s" : ""})`), M + 12, doc.y, { width: W - 12 });
+        doc.moveDown(0.3);
+      }
+    }
+
+    if (aeo.topQuery) {
+      doc.moveDown(0.4);
+      doc.fillColor("#64748b").font("Helvetica-Oblique").fontSize(9).text(cleanText(`Top cited query: "${aeo.topQuery}"`), M, doc.y, { width: W });
     }
   }
 

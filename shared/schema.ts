@@ -440,6 +440,7 @@ export const reportDrafts = pgTable("report_drafts", {
   analystNotes: text("analyst_notes"),
   createdAt: timestamp("created_at").defaultNow(),
   approvedAt: timestamp("approved_at"),
+  pipeline: text("pipeline"),
 });
 
 export const insertReportDraftSchema = createInsertSchema(reportDrafts).omit({ id: true, createdAt: true });
@@ -462,3 +463,23 @@ export const emailDrafts = pgTable("email_drafts", {
 export const insertEmailDraftSchema = createInsertSchema(emailDrafts).omit({ id: true, createdAt: true });
 export type InsertEmailDraft = z.infer<typeof insertEmailDraftSchema>;
 export type EmailDraft = typeof emailDrafts.$inferSelect;
+
+// AEO runs — A07 output; one row per query × engine combination.
+// engine: 'chatgpt' | 'claude' | 'gemini'
+export const aeoRuns = pgTable("aeo_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  runBatchId: varchar("run_batch_id").notNull(),
+  query: text("query").notNull(),
+  engine: text("engine").notNull(),
+  cited: integer("cited").notNull().default(0), // 1=true, 0=false (pg boolean→int for drizzle compat)
+  position: integer("position"),
+  context: text("context"),
+  excerpt: text("excerpt"),
+  brandEntity: text("brand_entity").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertAeoRunSchema = createInsertSchema(aeoRuns).omit({ id: true, createdAt: true });
+export type InsertAeoRun = z.infer<typeof insertAeoRunSchema>;
+export type AeoRun = typeof aeoRuns.$inferSelect;

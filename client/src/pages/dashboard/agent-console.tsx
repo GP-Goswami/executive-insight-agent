@@ -126,6 +126,9 @@ function fmtRelative(iso: string | null): string {
 // ── Section 1: Live Runs ──────────────────────────────────────────────────────
 
 function LiveRunsPanel({ tenantId }: { tenantId: string }) {
+  const qc = useQueryClient();
+  const [stopping, setStopping] = useState<Set<string>>(new Set());
+
   const { data: runs = [], isFetching } = useQuery<AgentRun[]>({
     queryKey: ["/api/agents/runs/live", tenantId],
     queryFn: async () => {
@@ -135,6 +138,21 @@ function LiveRunsPanel({ tenantId }: { tenantId: string }) {
     },
     refetchInterval: 10_000,
   });
+
+  const handleStop = async (runId: string) => {
+    setStopping((prev) => new Set(prev).add(runId));
+    try {
+      const res = await fetch(`/api/agents/runs/${runId}`, { method: "PATCH" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        console.error("[agent-console] stop run failed:", data);
+      }
+    } finally {
+      setStopping((prev) => { const n = new Set(prev); n.delete(runId); return n; });
+      qc.invalidateQueries({ queryKey: ["/api/agents/runs/live", tenantId] });
+      qc.invalidateQueries({ queryKey: ["/api/agents/runs/history", tenantId] });
+    }
+  };
 
   return (
     <Card className="border-white/10 bg-card/50">
@@ -155,23 +173,59 @@ function LiveRunsPanel({ tenantId }: { tenantId: string }) {
           <p className="text-center text-sm text-muted-foreground py-6">No agents running right now</p>
         ) : (
           <div className="space-y-2">
-            {runs.map((run) => (
-              <div key={run.id} className="flex items-center justify-between rounded-md border border-blue-500/20 bg-blue-500/5 px-3 py-2">
-                <div className="flex items-center gap-3">
-                  <Loader2 className="h-4 w-4 animate-spin text-blue-400 shrink-0" />
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      {run.agentId} — {AGENT_LABELS[run.agentId] ?? "Unknown Agent"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">{run.model} · started {fmtRelative(run.startedAt)}</p>
+            {runs.map((run) => {
+              const isStopping = stopping.has(run.id);
+              // Flag runs stuck longer than 30 minutes
+              const stuckMs = run.startedAt
+                ? Date.now() - new Date(run.startedAt).getTime()
+                : 0;
+              const isStuck = stuckMs > 30 * 60 * 1000;
+              return (
+                <div
+                  key={run.id}
+                  className={`flex items-center justify-between rounded-md border px-3 py-2 ${
+                    isStuck
+                      ? "border-red-500/30 bg-red-500/5"
+                      : "border-blue-500/20 bg-blue-500/5"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <Loader2 className={`h-4 w-4 animate-spin shrink-0 ${isStuck ? "text-red-400" : "text-blue-400"}`} />
+                    <div>
+                      <p className="text-sm font-medium text-foreground flex items-center gap-2">
+                        {run.agentId} — {AGENT_LABELS[run.agentId] ?? "Unknown Agent"}
+                        {isStuck && (
+                          <span className="text-xs font-normal text-red-400 bg-red-500/10 px-1.5 py-0.5 rounded">
+                            stuck
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {run.model} · started {fmtRelative(run.startedAt)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right text-xs text-muted-foreground">
+                      <p>{fmtTokens(run.tokensIn)} in / {fmtTokens(run.tokensOut)} out</p>
+                      <p>{fmtDuration(run.durationMs)}</p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                      disabled={isStopping}
+                      onClick={() => handleStop(run.id)}
+                    >
+                      {isStopping
+                        ? <Loader2 className="h-3 w-3 animate-spin" />
+                        : "Stop"
+                      }
+                    </Button>
                   </div>
                 </div>
-                <div className="text-right text-xs text-muted-foreground">
-                  <p>{fmtTokens(run.tokensIn)} in / {fmtTokens(run.tokensOut)} out</p>
-                  <p>{fmtDuration(run.durationMs)}</p>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </CardContent>
@@ -184,13 +238,16 @@ function LiveRunsPanel({ tenantId }: { tenantId: string }) {
 function RunHistoryTable({ tenantId }: { tenantId: string }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const { data: runs = [], isLoading } = useQuery<AgentRun[]>({
+  const { data: runs = [], isLoading, isFetching } = useQuery<AgentRun[]>({
     queryKey: ["/api/agents/runs/history", tenantId],
     queryFn: async () => {
       const res = await fetch(`/api/agents/runs?tenantId=${encodeURIComponent(tenantId)}&limit=50`);
       if (!res.ok) return [];
       return res.json();
     },
+    // Auto-refresh so "running" rows transition to completed and show their
+    // output without a manual page reload.
+    refetchInterval: 8_000,
   });
 
   function toggleRow(id: string) {
@@ -204,11 +261,17 @@ function RunHistoryTable({ tenantId }: { tenantId: string }) {
   return (
     <Card className="border-white/10 bg-card/50">
       <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Terminal className="h-4 w-4 text-muted-foreground" />
-          Run History
-          <span className="ml-1 text-xs font-normal text-muted-foreground">(last 50)</span>
-        </CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Terminal className="h-4 w-4 text-muted-foreground" />
+            Run History
+            <span className="ml-1 text-xs font-normal text-muted-foreground">(last 50)</span>
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            {isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+            <span className="text-xs text-muted-foreground">auto-refresh 8s</span>
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="p-0">
         {isLoading ? (

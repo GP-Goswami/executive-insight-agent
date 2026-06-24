@@ -44,7 +44,8 @@ router.post("/run", agentRunRateLimit, async (req, res) => {
   try {
     const tenantId = (req.body?.tenantId ?? req.query.tenantId) as string | undefined;
     if (!tenantId) return res.status(400).json({ error: "tenantId is required" });
-    const result = await runWeeklyReport(tenantId);
+    const { gscSiteUrl } = (req.body ?? {}) as { gscSiteUrl?: string };
+    const result = await runWeeklyReport(tenantId, gscSiteUrl ? { gscSiteUrl } : undefined);
     if (result.status === "failed") return res.status(500).json({ error: result.error ?? "Weekly report failed" });
     return res.json(result.findings);
   } catch (err) {
